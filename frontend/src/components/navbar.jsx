@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import useAuthStore from '../store/authStore'
+import useAuthStore from '../store/authstore'
 
 const s = {
   nav:  { background:'#1e293b', padding:'14px 24px', display:'flex', justifyContent:'space-between', alignItems:'center' },
