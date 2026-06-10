@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import useAuthStore from '../store/authStore'
+import useAuthStore from '../store/authstore'
 import api from '../api'
 
 const s = {
