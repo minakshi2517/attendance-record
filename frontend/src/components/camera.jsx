@@ -32,10 +32,10 @@ export default function Camera({ onCapture }) {
   const capture = () => {
     const canvas = canvasRef.current
     const video  = videoRef.current
-    canvas.width  = 320
-    canvas.height = 240
-    canvas.getContext('2d').drawImage(video, 0, 0, 320, 240)
-    const b64 = canvas.toDataURL('image/jpeg', 0.8)
+    canvas.width  = 640
+    canvas.height = 480
+    canvas.getContext('2d').drawImage(video, 0, 0, 640, 480)
+    const b64 = canvas.toDataURL('image/jpeg', 1.0)
     setCaptured(b64)
     onCapture(b64)        // parent ko bhejna
     stream?.getTracks().forEach(t => t.stop())
