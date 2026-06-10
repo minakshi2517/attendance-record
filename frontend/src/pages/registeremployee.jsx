@@ -22,22 +22,12 @@ export default function RegisterEmployee() {
     if (!image)                           { alert('Photo zaroori hai'); return }
     setLoading(true); setMsg(null)
     try {
-     const formData = new FormData()
-
-formData.append('name', form.name)
-formData.append('employee_id', form.employee_id)
-formData.append('department', form.department)
-formData.append('face_image', image)
-
-const { data } = await api.post(
-  '/api/employees/register',
-  formData,
-  {
-    headers: {
-      'Content-Type': 'multipart/form-data'
-    }
-  }
-)
+     const { data } = await api.post('/api/employees/register', {
+  name: form.name,
+  employee_id: form.employee_id,
+  department: form.department,
+  face_image: image
+})
       setTimeout(() => nav('/admin/dashboard'), 2000)
     } catch (err) {
       setMsg({ ok:false, text:`❌ ${err.response?.data?.detail || 'Error'}` })
