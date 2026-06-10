@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import Camera from '../components/Camera'
+import Camera from '../components/camera'
 import api from '../api'
 
 const s = {
