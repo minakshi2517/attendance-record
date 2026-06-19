@@ -26,15 +26,15 @@ def load_encodings(db):
 def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
     encodings = load_encodings(db)
     if not encodings:
-        raise HTTPException(404, "Koi registered employee nahi hai")
+        raise HTTPException(404, "No registered employees found.")
 
     emp_id, confidence = match_face(payload.image, encodings)
     if emp_id is None:
-        raise HTTPException(401, "Face recognize nahi hua. Dobara try karo.")
+        raise HTTPException(401, "Face not recognized. Try again with a similar pose and lighting to your registration photo.")
 
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
 
-    # Aaj pehle se check-in hai kya?
+    # Check whether already checked in today
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     existing = db.query(models.AttendanceLog).filter(
         models.AttendanceLog.employee_id == emp_id,
@@ -45,7 +45,7 @@ def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
     if existing:
         return {
             "status": "already_checked_in",
-            "message": f"{emp.name} pehle se check-in hai",
+            "message": f"{emp.name} is already checked in.",
             "check_in_time": existing.check_in.isoformat(),
         }
 
@@ -64,11 +64,11 @@ def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
 def check_out(payload: FaceRequest, db: Session = Depends(get_db)):
     encodings = load_encodings(db)
     if not encodings:
-        raise HTTPException(404, "Koi registered employee nahi hai")
+        raise HTTPException(404, "No registered employees found.")
 
     emp_id, confidence = match_face(payload.image, encodings)
     if emp_id is None:
-        raise HTTPException(401, "Face recognize nahi hua. Dobara try karo.")
+        raise HTTPException(401, "Face not recognized. Try again with a similar pose and lighting to your registration photo.")
 
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
 
@@ -80,23 +80,23 @@ def check_out(payload: FaceRequest, db: Session = Depends(get_db)):
     ).first()
 
     if not log:
-        raise HTTPException(400, "Pehle check-in karo!")
+        raise HTTPException(400, "Please check in first.")
 
-    # ⏱ 15 MINUTE RULE
+    # Minimum time required between check-in and check-out
     now           = datetime.now(timezone.utc)
     lockout_until = log.check_in + timedelta(minutes=settings.CHECKOUT_LOCKOUT_MINUTES)
     if now < lockout_until:
         remaining = int((lockout_until - now).total_seconds())
         mins      = remaining // 60
         secs      = remaining % 60
-        raise HTTPException(403, f"Check-out nahi ho sakta. {mins}m {secs}s aur ruko.")
+        raise HTTPException(403, f"Too early to check out. Please wait {mins}m {secs}s more.")
 
     log.check_out = now; db.commit()
     d = now - log.check_in
     hours, mins = int(d.total_seconds()//3600), int((d.total_seconds()%3600)//60)
     return {
         "status": "checked_out",
-        "message": f"Goodbye, {emp.name}! Aaj {hours}h {mins}m kaam kiya.",
+        "message": f"Goodbye, {emp.name}! You worked {hours}h {mins}m today.",
         "check_in_time": log.check_in.isoformat(),
         "check_out_time": now.isoformat(),
         "duration": f"{hours}h {mins}m",

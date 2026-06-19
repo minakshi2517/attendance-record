@@ -2,16 +2,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app.routes import auth, employees, attendance
+from app.utils.face_utils import warmup_model
 import os
 
 Base.metadata.create_all(bind=engine)
+warmup_model()
 
 app = FastAPI(title="Face Attendance System")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

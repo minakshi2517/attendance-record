@@ -31,18 +31,18 @@ export default function AttendanceLogs() {
 
   return (
     <div style={s.page}>
-      <h1 style={s.title}>📋 Attendance Logs</h1>
+      <h1 style={s.title}>Attendance Logs</h1>
       <div style={s.filters}>
-        <input style={s.inp} placeholder="Employee ID filter karo" value={empId} onChange={e => setEmpId(e.target.value)} />
+        <input style={s.inp} placeholder="Filter by Employee ID" value={empId} onChange={e => setEmpId(e.target.value)} />
         <input style={s.inp} type="date" value={from} onChange={e => setFrom(e.target.value)} />
         <input style={s.inp} type="date" value={to}   onChange={e => setTo(e.target.value)} />
-        <button style={s.btn} onClick={fetchLogs}>🔍 Search</button>
+        <button style={s.btn} onClick={fetchLogs}>Search</button>
         <button style={{...s.btn, background:'#334155'}} onClick={() => { setEmpId(''); setFrom(''); setTo(''); fetchLogs() }}>Reset</button>
       </div>
       <p style={{color:'#64748b', marginBottom:12, fontSize:13}}>Total records: {logs.length}</p>
       <table style={s.table}>
         <thead>
-          <tr>{['Naam','Employee ID','Department','Check In','Check Out','Duration','Status'].map(h =>
+          <tr>{['Name','Employee ID','Department','Check In','Check Out','Duration','Status'].map(h =>
             <th key={h} style={s.th}>{h}</th>)}</tr>
         </thead>
         <tbody>
@@ -51,14 +51,14 @@ export default function AttendanceLogs() {
               <td style={s.td}>{log.employee_name}</td>
               <td style={s.td}>{log.employee_id}</td>
               <td style={s.td}>{log.department || '-'}</td>
-              <td style={s.td}>{log.check_in  ? new Date(log.check_in ).toLocaleString('hi-IN') : '-'}</td>
-              <td style={s.td}>{log.check_out ? new Date(log.check_out).toLocaleString('hi-IN') : '-'}</td>
-              <td style={s.td}>{log.duration || '—'}</td>
+              <td style={s.td}>{log.check_in  ? new Date(log.check_in ).toLocaleString('en-GB') : '-'}</td>
+              <td style={s.td}>{log.check_out ? new Date(log.check_out).toLocaleString('en-GB') : '-'}</td>
+              <td style={s.td}>{log.duration || '-'}</td>
               <td style={s.td}>
                 <span style={{padding:'3px 8px', borderRadius:20, fontSize:11, fontWeight:600,
                   background: log.check_out ? '#1e293b' : '#064e3b',
                   color:      log.check_out ? '#94a3b8'  : '#10b981'}}>
-                  {log.status}
+                  {log.check_out ? 'Completed' : 'In Office'}
                 </span>
               </td>
             </tr>

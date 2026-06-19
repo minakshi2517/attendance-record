@@ -18,32 +18,33 @@ export default function RegisterEmployee() {
   const nav = useNavigate()
 
   const handleRegister = async () => {
-    if (!form.name || !form.employee_id) { alert('Naam aur Employee ID zaroori hai'); return }
-    if (!image)                           { alert('Photo zaroori hai'); return }
+    if (!form.name.trim() || !form.employee_id.trim()) { alert('Name and Employee ID are required.'); return }
+    if (!image) { alert('Please capture a photo first.'); return }
     setLoading(true); setMsg(null)
     try {
-     const { data } = await api.post('/api/employees/register', {
-  name: form.name,
-  employee_id: form.employee_id,
-  department: form.department,
-  face_image: image
-})
-      setTimeout(() => nav('/admin/dashboard'), 2000)
+      const { data } = await api.post('/api/employees/register', {
+        name: form.name.trim(),
+        employee_id: form.employee_id.trim(),
+        department: form.department.trim(),
+        face_image: image,
+      })
+      setMsg({ ok:true, text:`${data.message} - ${data.name} added.` })
+      setTimeout(() => nav('/admin/dashboard'), 1500)
     } catch (err) {
-      setMsg({ ok:false, text:`❌ ${err.response?.data?.detail || 'Error'}` })
+      setMsg({ ok:false, text: err.response?.data?.detail || 'Registration failed.' })
     } finally { setLoading(false) }
   }
 
   return (
     <div style={s.page}>
-      <h2 style={s.title}>👤 Naya Employee Register Karo</h2>
-      <input placeholder="Poora Naam *"    value={form.name}        onChange={e => setForm({...form, name:e.target.value})} />
-      <input placeholder="Employee ID *"   value={form.employee_id} onChange={e => setForm({...form, employee_id:e.target.value})} />
-      <input placeholder="Department"      value={form.department}  onChange={e => setForm({...form, department:e.target.value})} />
-      <p style={{color:'#64748b', marginBottom:12, fontSize:13}}>📷 Employee ki photo lo (seedha camera se dekhe)</p>
+      <h2 style={s.title}>Register New Employee</h2>
+      <input placeholder="Full Name *"   value={form.name}        onChange={e => setForm({...form, name:e.target.value})} />
+      <input placeholder="Employee ID *" value={form.employee_id} onChange={e => setForm({...form, employee_id:e.target.value})} />
+      <input placeholder="Department"    value={form.department}  onChange={e => setForm({...form, department:e.target.value})} />
+      <p style={{color:'#64748b', marginBottom:12, fontSize:13}}>Capture the employee's photo (face the camera directly).</p>
       <Camera onCapture={setImage} />
       <button style={s.btn} onClick={handleRegister} disabled={loading}>
-        {loading ? '⏳ Registering...' : '✅ Register Karo'}
+        {loading ? 'Registering...' : 'Register Employee'}
       </button>
       {msg && <div style={{...s.msg, background: msg.ok ? '#064e3b' : '#450a0a', color: msg.ok ? '#10b981' : '#ef4444'}}>{msg.text}</div>}
     </div>

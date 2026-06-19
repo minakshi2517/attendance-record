@@ -13,13 +13,13 @@ const s = {
 export default function AdminLogin() {
   const [form, setForm] = useState({ username:'', password:'' })
   const [err,  setErr]  = useState('')
+  const [loading, setLoading] = useState(false)
   const { login } = useAuthStore()
   const nav = useNavigate()
 
   const handleSubmit = async () => {
-    setErr('')
+    setErr(''); setLoading(true)
     try {
-      // OAuth2 form format chahiye FastAPI ko
       const body = new URLSearchParams({ username: form.username, password: form.password })
       const { data } = await api.post('/api/auth/login', body, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -27,19 +27,23 @@ export default function AdminLogin() {
       login(data.access_token, data.admin_name)
       nav('/admin/dashboard')
     } catch {
-      setErr('Wrong username ya password')
+      setErr('Incorrect username or password.')
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
     <div style={s.page}>
-      <h2 style={s.title}>🔐 Admin Login</h2>
+      <h2 style={s.title}>Admin Login</h2>
       <input placeholder="Username" value={form.username}
         onChange={e => setForm({...form, username: e.target.value})} />
       <input placeholder="Password" type="password" value={form.password}
         onChange={e => setForm({...form, password: e.target.value})}
         onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-      <button style={s.btn} onClick={handleSubmit}>Login</button>
+      <button style={s.btn} onClick={handleSubmit} disabled={loading}>
+        {loading ? 'Signing in...' : 'Login'}
+      </button>
       {err && <div style={s.err}>{err}</div>}
     </div>
   )

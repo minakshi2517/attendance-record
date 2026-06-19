@@ -5,7 +5,7 @@ import useAuthStore from '../store/authstore'
 const s = {
   nav:  { background:'#1e293b', padding:'14px 24px', display:'flex', justifyContent:'space-between', alignItems:'center' },
   logo: { fontSize:20, fontWeight:700, color:'#818cf8', textDecoration:'none' },
-  links:{ display:'flex', gap:20 },
+  links:{ display:'flex', gap:20, alignItems:'center' },
   link: { color:'#94a3b8', textDecoration:'none', fontSize:14 },
   btn:  { background:'#ef4444', color:'#fff', padding:'6px 16px', fontSize:13 },
 }
@@ -18,9 +18,9 @@ export default function Navbar() {
 
   return (
     <nav style={s.nav}>
-      <Link to="/" style={s.logo}>🎯 Attendance</Link>
+      <Link to="/" style={s.logo}>Attendance System</Link>
       <div style={s.links}>
-        <Link to="/"             style={s.link}>Check In/Out</Link>
+        <Link to="/" style={s.link}>Check In / Out</Link>
         {token ? (
           <>
             <Link to="/admin/dashboard" style={s.link}>Dashboard</Link>

@@ -22,14 +22,14 @@ export default function CheckInOut() {
   const [result,  setResult]  = useState(null)
 
   const handleSubmit = async () => {
-    if (!image) { alert('Pehle photo lo!'); return }
+    if (!image) { alert('Please capture a photo first.'); return }
     setLoading(true); setResult(null)
     try {
       const endpoint = mode === 'checkin' ? '/api/attendance/checkin' : '/api/attendance/checkout'
       const { data } = await api.post(endpoint, { image })
       setResult({ ok: true, data })
     } catch (err) {
-      setResult({ ok: false, msg: err.response?.data?.detail || 'Kuch problem aayi' })
+      setResult({ ok: false, msg: err.response?.data?.detail || 'Something went wrong.' })
     } finally {
       setLoading(false)
     }
@@ -38,15 +38,14 @@ export default function CheckInOut() {
   return (
     <div style={s.page}>
       <h1 style={s.title}>Face Attendance</h1>
-      <p style={s.sub}>Apna chehra dikhao — baaki system karta hai</p>
+      <p style={s.sub}>Show your face to the camera - the system handles the rest.</p>
 
-      {/* Toggle: Check In / Check Out */}
       <div style={s.btns}>
         <button style={mode==='checkin'  ? s.active : s.idle} onClick={() => { setMode('checkin');  setResult(null) }}>
-          ✅ Check In
+          Check In
         </button>
         <button style={mode==='checkout' ? s.active : s.idle} onClick={() => { setMode('checkout'); setResult(null) }}>
-          🚪 Check Out
+          Check Out
         </button>
       </div>
 
@@ -57,7 +56,7 @@ export default function CheckInOut() {
         onClick={handleSubmit}
         disabled={loading}
       >
-        {loading ? '⏳ Processing...' : mode==='checkin' ? '✅ Mark Attendance' : '🚪 Check Out'}
+        {loading ? 'Processing...' : mode==='checkin' ? 'Mark Check In' : 'Mark Check Out'}
       </button>
 
       {result && (
@@ -67,15 +66,15 @@ export default function CheckInOut() {
               <div style={s.success}>{result.data.message}</div>
               {result.data.employee && (
                 <div style={s.info}>
-                  <div>👤 {result.data.employee.name}</div>
-                  <div>🏢 {result.data.employee.department || 'N/A'}</div>
-                  <div>🎯 Confidence: {result.data.confidence}%</div>
+                  <div>Name: {result.data.employee.name}</div>
+                  <div>Department: {result.data.employee.department || 'N/A'}</div>
+                  <div>Confidence: {result.data.confidence}%</div>
                 </div>
               )}
-              {result.data.duration && <div style={s.info}>⏱ Kaam kiya: {result.data.duration}</div>}
+              {result.data.duration && <div style={s.info}>Time worked: {result.data.duration}</div>}
             </>
           ) : (
-            <div style={s.error}>❌ {result.msg}</div>
+            <div style={s.error}>{result.msg}</div>
           )}
         </div>
       )}
