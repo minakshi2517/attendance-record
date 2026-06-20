@@ -14,12 +14,22 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 logger = logging.getLogger(__name__)
 
-DEEPFACE_OPTS = {
-    "model_name": "Facenet",
-    "enforce_detection": False,
-    "detector_backend": "skip",
-    "align": False,
-}
+# Facenet produces a 128-d embedding. We crop + align the real face first,
+# otherwise the whole photo (background, clothes) leaks into the embedding and
+# different people start matching each other.
+MODEL_NAME = "Facenet"
+
+# Detectors tried in order. opencv ships with opencv-python (no download),
+# ssd is a good fallback. We deliberately DO NOT use "skip" here.
+DETECTOR_BACKENDS = ["opencv", "ssd"]
+
+# Cosine-distance threshold for a confident match. Lower = stricter.
+# DeepFace's default for Facenet is 0.40; we use 0.34 to avoid false matches.
+FACE_MATCH_THRESHOLD = 0.34
+
+# The best candidate must beat the runner-up by at least this margin,
+# otherwise the result is too ambiguous to trust.
+MATCH_MARGIN = 0.06
 
 
 @contextlib.contextmanager
@@ -39,107 +49,125 @@ def _quiet_deepface():
 def decode_base64_image(b64: str) -> np.ndarray:
     if "," in b64:
         b64 = b64.split(",")[1]
-
     img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
     return np.array(img)
 
 
-def _represent(img_array: np.ndarray) -> Optional[np.ndarray]:
+def _normalize(v: np.ndarray) -> np.ndarray:
+    n = np.linalg.norm(v)
+    return v / n if n > 0 else v
+
+
+def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
+    return float(1.0 - np.dot(_normalize(a), _normalize(b)))
+
+
+def _represent(img_array: np.ndarray, require_face: bool) -> Optional[np.ndarray]:
+    """Return a face embedding, or None if no real face could be detected.
+
+    When require_face is True we enforce detection so non-face images are
+    rejected instead of silently embedding the whole picture.
+    """
     from deepface import DeepFace
-    import tempfile
 
-    backends = [
-        {"detector_backend": "skip", "align": False},
-        {"detector_backend": "opencv", "align": True, "enforce_detection": False},
-        {"detector_backend": "ssd", "align": True, "enforce_detection": False},
-    ]
-
-    for opts in backends:
+    for backend in DETECTOR_BACKENDS:
         try:
             with _quiet_deepface():
-                embedding = DeepFace.represent(
+                reps = DeepFace.represent(
                     img_path=img_array,
-                    model_name=DEEPFACE_OPTS["model_name"],
-                    enforce_detection=opts.get("enforce_detection", False),
-                    detector_backend=opts["detector_backend"],
-                    align=opts.get("align", False),
+                    model_name=MODEL_NAME,
+                    detector_backend=backend,
+                    enforce_detection=require_face,
+                    align=True,
                 )
-            if embedding:
-                return np.array(embedding[0]["embedding"])
+            if not reps:
+                continue
+
+            # If multiple faces are found, keep the largest (closest to camera).
+            if len(reps) > 1:
+                def area(r):
+                    fa = r.get("facial_area", {})
+                    return fa.get("w", 0) * fa.get("h", 0)
+                reps = sorted(reps, key=area, reverse=True)
+
+            return np.array(reps[0]["embedding"], dtype=np.float64)
         except Exception as e:
-            logger.warning("DeepFace %s failed: %s", opts["detector_backend"], e)
-
-    # Windows pe kabhi-kabhi numpy array direct pass fail hota hai — file se try karo
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-        Image.fromarray(img_array).save(f.name, quality=95)
-        temp_path = f.name
-
-    try:
-        with _quiet_deepface():
-            embedding = DeepFace.represent(
-                img_path=temp_path,
-                model_name=DEEPFACE_OPTS["model_name"],
-                enforce_detection=False,
-                detector_backend="skip",
-                align=False,
-            )
-        if embedding:
-            return np.array(embedding[0]["embedding"])
-    except Exception as e:
-        logger.warning("DeepFace file fallback failed: %s", e)
-    finally:
-        os.unlink(temp_path)
+            logger.warning("DeepFace detector '%s' failed: %s", backend, e)
+            continue
 
     return None
 
 
 def encode_face(base64_image: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Used at registration time. Requires a clearly detectable face."""
     try:
         img_array = decode_base64_image(base64_image)
         if img_array.size == 0 or min(img_array.shape[:2]) < 80:
-            return None, "Photo bahut chhoti hai. Dobara lo."
+            return None, "The photo is too small. Please capture again."
 
-        enc = _represent(img_array)
+        enc = _represent(img_array, require_face=True)
         if enc is None:
-            return None, "Face process nahi hua. Camera seedha face pe rakho aur achhi light mein photo lo."
+            return None, ("No face detected. Move closer, face the camera "
+                          "directly, and make sure the lighting is good.")
         return pickle.dumps(enc), None
     except Exception as e:
         logger.exception("encode_face error")
-        return None, f"Face error: {str(e)}"
+        return None, f"Face processing error: {str(e)}"
 
 
 def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float]:
+    """Used at check-in/out. Returns (employee_id, confidence%) or (None, 0)."""
     try:
         img_array = decode_base64_image(base64_image)
-        unknown_enc = _represent(img_array)
-        if unknown_enc is None:
+        probe = _represent(img_array, require_face=True)
+        if probe is None:
             return None, 0.0
 
-        best_id = None
-        best_dist = float("inf")
-
+        scored = []
         for emp_id, enc_bytes in stored_encodings:
-            known_enc = pickle.loads(enc_bytes)
-            dist = float(np.linalg.norm(unknown_enc - known_enc))
+            known = pickle.loads(enc_bytes)
+            known = np.asarray(known, dtype=np.float64).reshape(-1)
+            # Skip encodings whose dimension does not match (old/incompatible).
+            if known.shape != probe.shape:
+                logger.warning("Skipping employee %s: encoding dim mismatch", emp_id)
+                continue
+            scored.append((emp_id, _cosine_distance(probe, known)))
 
-            if dist < best_dist:
-                best_dist = dist
-                best_id = emp_id
+        if not scored:
+            return None, 0.0
 
-        if best_dist < 10.0:
-            confidence = round(max(0, (10.0 - best_dist) / 10.0 * 100), 2)
-            return best_id, confidence
+        scored.sort(key=lambda x: x[1])
+        best_id, best_dist = scored[0]
+        second_dist = scored[1][1] if len(scored) > 1 else float("inf")
 
-        return None, 0.0
+        # Reject if not confident enough, or too close to the runner-up.
+        if best_dist > FACE_MATCH_THRESHOLD:
+            return None, 0.0
+        if (second_dist - best_dist) < MATCH_MARGIN and second_dist <= FACE_MATCH_THRESHOLD:
+            logger.info("Ambiguous match (best=%.3f, second=%.3f) — rejected",
+                        best_dist, second_dist)
+            return None, 0.0
+
+        confidence = round(max(0.0, (1.0 - best_dist)) * 100, 2)
+        return best_id, confidence
     except Exception:
         logger.exception("match_face error")
         return None, 0.0
 
 
 def warmup_model():
+    """Load the model weights once at startup so the first request is fast."""
     try:
-        img = Image.new("RGB", (224, 224), color=(200, 180, 160))
-        _represent(np.array(img))
+        from deepface import DeepFace
+        img = (np.random.rand(160, 160, 3) * 255).astype("uint8")
+        with _quiet_deepface():
+            DeepFace.represent(
+                img_path=img,
+                model_name=MODEL_NAME,
+                detector_backend="skip",
+                enforce_detection=False,
+                align=False,
+            )
         logger.info("DeepFace model warmed up")
     except Exception as e:
         logger.warning("Model warmup failed: %s", e)
