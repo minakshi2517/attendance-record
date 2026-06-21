@@ -5,7 +5,7 @@ from typing import Optional, List
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import encode_face
+from app.utils.face_utils import extract_embedding, serialize_embeddings
 
 router = APIRouter()
 
@@ -13,21 +13,49 @@ class EmployeeCreate(BaseModel):
     name:        str
     employee_id: str
     department:  Optional[str] = None
-    face_image:  str            # base64 image captured from the admin camera
+    face_image:  Optional[str] = None         # single sample (backward compatible)
+    face_images: Optional[List[str]] = None   # multiple samples (preferred)
 
 class EmployeeUpdate(BaseModel):
     name:        Optional[str] = None
     employee_id: Optional[str] = None
     department:  Optional[str] = None
-    face_image:  Optional[str] = None   # optional: re-capture face
+    face_image:  Optional[str] = None
+    face_images: Optional[List[str]] = None
+
+
+def _collect_images(face_image, face_images) -> List[str]:
+    imgs = list(face_images) if face_images else []
+    if face_image:
+        imgs.append(face_image)
+    return [i for i in imgs if i]
+
+
+def _build_encoding(images: List[str]) -> bytes:
+    """Turn one or more face photos into stored embeddings, or raise 422."""
+    embeddings = []
+    last_err = None
+    for img in images:
+        emb, err = extract_embedding(img)
+        if emb is not None:
+            embeddings.append(emb)
+        else:
+            last_err = err
+    if not embeddings:
+        raise HTTPException(422, last_err or "No face detected in the captured photos. Please try again.")
+    return serialize_embeddings(embeddings)
+
 
 @router.post("/register")
 def register_employee(payload: EmployeeCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     if db.query(models.Employee).filter(models.Employee.employee_id == payload.employee_id).first():
         raise HTTPException(400, "This Employee ID is already registered.")
-    face_bytes, face_err = encode_face(payload.face_image)
-    if face_bytes is None:
-        raise HTTPException(422, face_err or "No face detected. Face the camera directly and capture again.")
+
+    images = _collect_images(payload.face_image, payload.face_images)
+    if not images:
+        raise HTTPException(422, "At least one face photo is required.")
+    face_bytes = _build_encoding(images)
+
     emp = models.Employee(
         name          = payload.name,
         employee_id   = payload.employee_id,
@@ -64,11 +92,9 @@ def update_employee(employee_id: str, payload: EmployeeUpdate, db: Session = Dep
     if payload.department is not None:
         emp.department = payload.department
 
-    if payload.face_image:
-        face_bytes, face_err = encode_face(payload.face_image)
-        if face_bytes is None:
-            raise HTTPException(422, face_err or "No face detected. Face the camera directly and capture again.")
-        emp.face_encoding = face_bytes
+    images = _collect_images(payload.face_image, payload.face_images)
+    if images:
+        emp.face_encoding = _build_encoding(images)
 
     db.commit(); db.refresh(emp)
     return {

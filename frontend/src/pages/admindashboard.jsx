@@ -177,6 +177,7 @@ export default function AdminDashboard() {
 
       <h2 style={s.section} ref={teamRef}>Registered Team Members ({employees.length})</h2>
       <p style={{color:'#64748b', fontSize:13, marginBottom:8}}>Click any row to view full details, edit, or delete.</p>
+      <div className="table-scroll">
       <table style={s.table}>
         <thead>
           <tr>{['Name','Employee ID','Department','Registered','Status','Actions'].map(h =>
@@ -211,8 +212,10 @@ export default function AdminDashboard() {
           )}
         </tbody>
       </table>
+      </div>
 
       <h2 style={s.section}>Today's Attendance</h2>
+      <div className="table-scroll">
       <table style={s.table}>
         <thead>
           <tr>{['Name','ID','Department','Check In','Check Out','Duration','Status'].map(h =>
@@ -233,6 +236,7 @@ export default function AdminDashboard() {
           {logs.length === 0 && <tr><td colSpan={7} style={{...s.td, textAlign:'center', color:'#64748b'}}>No attendance recorded today yet.</td></tr>}
         </tbody>
       </table>
+      </div>
 
       {selected && (
         <div style={s.modal} onClick={() => setSelected(null)}>

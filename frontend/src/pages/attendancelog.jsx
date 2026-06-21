@@ -40,6 +40,7 @@ export default function AttendanceLogs() {
         <button style={{...s.btn, background:'#334155'}} onClick={() => { setEmpId(''); setFrom(''); setTo(''); fetchLogs() }}>Reset</button>
       </div>
       <p style={{color:'#64748b', marginBottom:12, fontSize:13}}>Total records: {logs.length}</p>
+      <div className="table-scroll">
       <table style={s.table}>
         <thead>
           <tr>{['Name','Employee ID','Department','Check In','Check Out','Duration','Status'].map(h =>
@@ -65,6 +66,7 @@ export default function AttendanceLogs() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
