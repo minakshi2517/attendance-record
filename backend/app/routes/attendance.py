@@ -36,7 +36,7 @@ def _identify(payload: FaceRequest, db: Session):
 
     emp_id, confidence, reason = match_face(payload.image, encodings)
     if emp_id is None:
-        raise HTTPException(401, MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"]))
+        raise HTTPException(403, MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"]))
 
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
     return emp, confidence

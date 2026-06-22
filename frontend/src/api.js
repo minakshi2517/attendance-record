@@ -3,7 +3,10 @@ import useAuthStore from './store/authstore'
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-const api = axios.create({ baseURL: BASE_URL })
+const api = axios.create({
+  baseURL: BASE_URL,
+  timeout: 120000, // face scan on server can take up to 2 min on first run
+})
 
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('admin_token')
@@ -11,14 +14,29 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Old/invalid token → clear session and send user back to login.
 api.interceptors.response.use(
   res => res,
   err => {
-    if (err.response?.status === 401 && !err.config?.url?.includes('/api/auth/login')) {
-      useAuthStore.getState().logout()
-      if (!window.location.pathname.includes('/admin/login')) {
-        window.location.href = '/admin/login?expired=1'
+    const status = err.response?.status
+    const url = err.config?.url || ''
+    const detail = String(err.response?.data?.detail || '')
+
+    // Face check-in/out errors must NOT trigger logout (they also used to return 401).
+    if (url.includes('/api/attendance/')) {
+      return Promise.reject(err)
+    }
+
+    // Only treat auth failures as session expiry — not face/validation errors.
+    if (status === 401 && !url.includes('/api/auth/login')) {
+      const isSession =
+        detail.toLowerCase().includes('session') ||
+        detail.toLowerCase().includes('log in') ||
+        detail.toLowerCase().includes('credentials')
+      if (isSession) {
+        useAuthStore.getState().logout()
+        if (!window.location.pathname.includes('/admin/login')) {
+          window.location.href = '/admin/login?expired=1'
+        }
       }
     }
     return Promise.reject(err)
