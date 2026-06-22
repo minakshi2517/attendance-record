@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useCamera from '../hooks/usecamera'
-import api from '../api'
+import api, { parseApiError } from '../api'
 
 export default function RegisterEmployee() {
   const { videoRef, ready, error, start, captureMultiple } = useCamera()
@@ -22,13 +22,13 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Scan 1 of 3 — look straight at the camera...')
+    setStatus('Scan 1 of 2 — look straight at the camera...')
     try {
-      const face_images = await captureMultiple(3, 800, (step, total) => {
+      const face_images = await captureMultiple(2, 900, (step, total) => {
         setStatus(`Scan ${step} of ${total} — hold still, one person only...`)
       })
-      if (face_images.length < 2) {
-        setMsg({ ok:false, text:'Could not capture face samples. Please try again.' }); return
+      if (face_images.length < 1) {
+        setMsg({ ok:false, text:'Could not capture face. Please try again.' }); return
       }
 
       setStatus('Saving face geometry — please wait 30-90 sec, do not close...')
@@ -46,7 +46,7 @@ export default function RegisterEmployee() {
       } else if (!err.response) {
         setMsg({ ok:false, text:'Network error. Check your internet and try again.' })
       } else {
-        setMsg({ ok:false, text: err.response?.data?.detail || 'Registration failed. Please try again.' })
+        setMsg({ ok:false, text: parseApiError(err, 'Registration failed. Please try again.') })
       }
     } finally {
       setLoading(false)
@@ -74,7 +74,7 @@ export default function RegisterEmployee() {
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill details, face the camera, tap Register. The system captures 3 quick scans
+          Fill details, face the camera, tap Register. The system captures 2 quick scans
           and saves only facial geometry — lighting and clothes do not matter.
         </p>
 

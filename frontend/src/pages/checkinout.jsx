@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import useCamera from '../hooks/usecamera'
-import api from '../api'
+import api, { parseApiError } from '../api'
 
 export default function CheckInOut() {
   const { videoRef, ready, error, start, capture } = useCamera()
@@ -22,7 +22,7 @@ export default function CheckInOut() {
       setResult({ ok:true, data })
       setStatus('')
     } catch (err) {
-      setResult({ ok:false, msg: err.response?.data?.detail || 'Something went wrong. Please try again.' })
+      setResult({ ok:false, msg: parseApiError(err) })
       setStatus('')
     } finally {
       setLoading(false)

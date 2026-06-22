@@ -27,8 +27,8 @@ DETECTORS = ["retinaface", "opencv", "ssd"]
 FACE_MATCH_THRESHOLD = 0.48
 MATCH_MARGIN = 0.12
 MIN_MATCH_CONFIDENCE = 65.0
-MIN_FACE_FRAME_RATIO = 0.05   # face must cover >= 5% of frame
-MIN_BLUR_VARIANCE = 35.0      # reject very blurry captures
+MIN_FACE_FRAME_RATIO = 0.04
+MIN_BLUR_VARIANCE = 25.0
 
 
 @contextlib.contextmanager
@@ -258,8 +258,6 @@ def build_profile(images: List[str]) -> Tuple[Optional[bytes], Optional[str]]:
             last_err = err
     if not embeddings:
         return None, last_err or "No valid face found. Please try again."
-    if len(embeddings) == 1:
-        return None, "Capture at least 2 face samples for a reliable profile."
     return _pack_embeddings(embeddings), None
 
 

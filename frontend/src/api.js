@@ -1,5 +1,6 @@
 import axios from 'axios'
 import useAuthStore from './store/authstore'
+import { parseApiError } from './utils/apiError'
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -19,7 +20,7 @@ api.interceptors.response.use(
   err => {
     const status = err.response?.status
     const url = err.config?.url || ''
-    const detail = String(err.response?.data?.detail || '')
+    const detail = parseApiError(err, '')
 
     // Face check-in/out errors must NOT trigger logout (they also used to return 401).
     if (url.includes('/api/attendance/')) {
@@ -43,4 +44,5 @@ api.interceptors.response.use(
   }
 )
 
+export { parseApiError }
 export default api

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import useAuthStore from '../store/authstore'
-import api from '../api'
+import api, { parseApiError } from '../api'
 
 export default function AdminLogin() {
   const [form, setForm] = useState({ username:'admin', password:'' })
@@ -28,7 +28,7 @@ export default function AdminLogin() {
       login(data.access_token, data.admin_name)
       nav('/admin/dashboard')
     } catch (e) {
-      setErr(e.response?.data?.detail || 'Incorrect username or password.')
+      setErr(parseApiError(e, 'Incorrect username or password.'))
     } finally { setLoading(false) }
   }
 

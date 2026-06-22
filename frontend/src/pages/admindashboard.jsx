@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import api from '../api'
+import api, { parseApiError } from '../api'
 
 export default function AdminDashboard() {
   const [stats, setStats]         = useState(null)
@@ -49,7 +49,7 @@ export default function AdminDashboard() {
       const statsRes = await api.get('/api/attendance/stats')
       setStats(statsRes.data)
     } catch (e) {
-      alert(e.response?.data?.detail || 'Delete failed.')
+      alert(parseApiError(e, 'Delete failed.'))
     }
   }
 
@@ -64,7 +64,7 @@ export default function AdminDashboard() {
       const statsRes = await api.get('/api/attendance/stats')
       setStats(statsRes.data)
     } catch (e) {
-      alert(e.response?.data?.detail || 'Status update failed.')
+      alert(parseApiError(e, 'Status update failed.'))
     }
   }
 
@@ -93,7 +93,7 @@ export default function AdminDashboard() {
       flash('Employee updated.')
       setEditing(null)
     } catch (e) {
-      alert(e.response?.data?.detail || 'Update failed.')
+      alert(parseApiError(e, 'Update failed.'))
     } finally {
       setSaving(false)
     }
