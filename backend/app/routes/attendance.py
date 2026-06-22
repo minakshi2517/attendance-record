@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import match_face, extract_embedding, augment_stored_encoding
+from app.utils.face_utils import match_face
 from app.config import settings
 
 router = APIRouter()
@@ -39,15 +39,6 @@ def _identify(payload: FaceRequest, db: Session):
         raise HTTPException(401, MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"]))
 
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
-
-    # Adapt profile: store this successful scan so future matches improve over time.
-    probe, _ = extract_embedding(payload.image)
-    if probe is not None and emp and emp.face_encoding:
-        updated = augment_stored_encoding(emp.face_encoding, probe, confidence)
-        if updated:
-            emp.face_encoding = updated
-            db.commit()
-
     return emp, confidence
 
 @router.post("/checkin")

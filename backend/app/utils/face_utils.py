@@ -15,11 +15,18 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 logger = logging.getLogger(__name__)
 
+# ArcFace = industry standard. Stores 512 numbers from facial geometry
+# (eyes, nose, mouth, jaw). Clothes/lighting/background do NOT matter.
 MODEL_NAME = "ArcFace"
-DETECTORS = ["opencv", "ssd", "retinaface"]
-FACE_MATCH_THRESHOLD = 0.72
-MATCH_MARGIN = 0.05
-MAX_SAMPLES = 5
+EMBEDDING_DIM = 512
+
+DETECTORS = ["retinaface", "opencv", "ssd"]
+
+# STRICT thresholds — prefer "not recognized" over wrong person.
+# ArcFace cosine distance: lower = more similar. DeepFace default ~0.68.
+FACE_MATCH_THRESHOLD = 0.55
+MATCH_MARGIN = 0.10          # 2nd person must be at least this much farther
+MIN_MATCH_CONFIDENCE = 55.0  # reject weak matches (%)
 
 
 @contextlib.contextmanager
@@ -58,7 +65,25 @@ def _save_temp(img_array: np.ndarray) -> str:
     return f.name
 
 
-def _represent(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+def _pick_largest_face(reps: list) -> dict:
+    if len(reps) == 1:
+        return reps[0]
+    return max(reps, key=lambda r: (
+        r.get("facial_area", {}).get("w", 0)
+        * r.get("facial_area", {}).get("h", 0)
+    ))
+
+
+def _face_big_enough(area: dict, img_shape) -> bool:
+    if not area:
+        return True
+    h, w = img_shape[:2]
+    face_area = area.get("w", 0) * area.get("h", 0)
+    return face_area >= (w * h * 0.04)  # face >= 4% of frame
+
+
+def _represent(img_array: np.ndarray, strict_only: bool = False) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+    """Detect + align face, return 512-d ArcFace embedding."""
     from deepface import DeepFace
 
     temp_path = None
@@ -68,9 +93,11 @@ def _represent(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[di
     except Exception:
         paths = [img_array]
 
+    strict_modes = [True] if strict_only else [True, False]
+
     try:
         for backend in DETECTORS:
-            for strict in (True, False):
+            for strict in strict_modes:
                 for img in paths:
                     try:
                         with _quiet():
@@ -83,16 +110,14 @@ def _represent(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[di
                             )
                         if not reps:
                             continue
-                        best = reps[0]
-                        if len(reps) > 1:
-                            best = max(reps, key=lambda r: (
-                                r.get("facial_area", {}).get("w", 0)
-                                * r.get("facial_area", {}).get("h", 0)
-                            ))
-                        return (
-                            np.array(best["embedding"], dtype=np.float64),
-                            best.get("facial_area"),
-                        )
+                        best = _pick_largest_face(reps)
+                        area = best.get("facial_area")
+                        if strict and not _face_big_enough(area, img_array.shape):
+                            continue
+                        emb = np.array(best["embedding"], dtype=np.float64)
+                        if emb.shape[0] != EMBEDDING_DIM:
+                            continue
+                        return emb, area
                     except Exception as e:
                         logger.debug("represent %s strict=%s: %s", backend, strict, e)
         return None, None
@@ -107,6 +132,7 @@ def _represent(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[di
 def _pack_embeddings(embs: List[np.ndarray]) -> bytes:
     return pickle.dumps({
         "model": MODEL_NAME,
+        "version": 2,
         "embeddings": [e.reshape(-1) for e in embs],
     })
 
@@ -114,20 +140,27 @@ def _pack_embeddings(embs: List[np.ndarray]) -> bytes:
 def _unpack(enc_bytes) -> List[np.ndarray]:
     data = pickle.loads(enc_bytes)
     if isinstance(data, dict):
-        return [np.asarray(e, dtype=np.float64).reshape(-1) for e in data.get("embeddings", [])]
+        if data.get("model") and data.get("model") != MODEL_NAME:
+            return []
+        return [
+            np.asarray(e, dtype=np.float64).reshape(-1)
+            for e in data.get("embeddings", [])
+            if len(np.asarray(e).reshape(-1)) == EMBEDDING_DIM
+        ]
     if isinstance(data, list):
-        return [np.asarray(e, dtype=np.float64).reshape(-1) for e in data]
-    return [np.asarray(data, dtype=np.float64).reshape(-1)]
+        return [np.asarray(e, dtype=np.float64).reshape(-1) for e in data if len(np.asarray(e).reshape(-1)) == EMBEDDING_DIM]
+    arr = np.asarray(data, dtype=np.float64).reshape(-1)
+    return [arr] if len(arr) == EMBEDDING_DIM else []
 
 
 def extract_embedding(base64_image: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
     try:
         img = decode_base64_image(base64_image)
-        if img.size == 0 or min(img.shape[:2]) < 60:
-            return None, "Photo too small. Move closer to the camera."
-        emb, _ = _represent(img)
+        if img.size == 0 or min(img.shape[:2]) < 80:
+            return None, "Move closer to the camera."
+        emb, _ = _represent(img, strict_only=False)
         if emb is None:
-            return None, "Could not detect a face. Look straight at the camera in good light."
+            return None, "No face detected. Look straight at the camera in good light."
         return emb, None
     except Exception as e:
         logger.exception("extract_embedding")
@@ -151,7 +184,9 @@ def _confidence(dist: float) -> float:
 
 def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
     try:
-        probe, _ = _represent(decode_base64_image(base64_image))
+        img = decode_base64_image(base64_image)
+        # Attendance: STRICT only — no sloppy fallback that causes wrong matches.
+        probe, _ = _represent(img, strict_only=True)
         if probe is None:
             return None, 0.0, "no_face"
 
@@ -161,45 +196,35 @@ def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int]
                 embs = _unpack(enc_bytes)
             except Exception:
                 continue
-            dists = [_cosine_dist(probe, e) for e in embs if e.shape == probe.shape]
-            if embs and not dists:
+            if not embs:
                 outdated += 1
-            if dists:
-                scores.append((emp_id, min(dists)))
+                continue
+            dists = [_cosine_dist(probe, e) for e in embs]
+            scores.append((emp_id, min(dists)))
 
         if not scores:
             return None, 0.0, "outdated_profile" if outdated else "no_match"
 
         scores.sort(key=lambda x: x[1])
-        best_id, best = scores[0]
-        second = scores[1][1] if len(scores) > 1 else 999.0
+        best_id, best_dist = scores[0]
+        second_dist = scores[1][1] if len(scores) > 1 else 999.0
 
-        if best > FACE_MATCH_THRESHOLD:
+        if best_dist > FACE_MATCH_THRESHOLD:
             return None, 0.0, "no_match"
-        if len(scores) > 1 and second <= FACE_MATCH_THRESHOLD and (second - best) < MATCH_MARGIN:
-            return None, 0.0, "ambiguous"
 
-        return best_id, _confidence(best), None
+        conf = _confidence(best_dist)
+        if conf < MIN_MATCH_CONFIDENCE:
+            return None, 0.0, "no_match"
+
+        if len(scores) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
+            if (second_dist - best_dist) < MATCH_MARGIN:
+                logger.info("Rejected ambiguous: best=%.3f second=%.3f", best_dist, second_dist)
+                return None, 0.0, "ambiguous"
+
+        return best_id, conf, None
     except Exception:
         logger.exception("match_face")
         return None, 0.0, "error"
-
-
-def augment_stored_encoding(enc_bytes: bytes, new_emb: np.ndarray, confidence: float) -> Optional[bytes]:
-    if confidence < 65.0:
-        return None
-    try:
-        embs = _unpack(enc_bytes)
-        if not embs or embs[0].shape != new_emb.shape:
-            return None
-        if min(_cosine_dist(new_emb, e) for e in embs) < 0.12:
-            return None
-        embs.append(new_emb.reshape(-1))
-        if len(embs) > MAX_SAMPLES:
-            embs = embs[-MAX_SAMPLES:]
-        return _pack_embeddings(embs)
-    except Exception:
-        return None
 
 
 def warmup_model():
@@ -207,6 +232,6 @@ def warmup_model():
         from deepface import DeepFace
         with _quiet():
             DeepFace.build_model(MODEL_NAME)
-        logger.info("ArcFace model ready")
+        logger.info("ArcFace ready")
     except Exception as e:
         logger.warning("Warmup failed: %s", e)

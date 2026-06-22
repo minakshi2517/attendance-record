@@ -22,19 +22,24 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Capturing face...')
+    setStatus('Scanning face (3 samples)...')
     try {
-      const image = capture()
-      if (!image) {
+      const frames = []
+      for (let i = 0; i < 3; i++) {
+        const img = capture()
+        if (img) frames.push(img)
+        if (i < 2) await new Promise(r => setTimeout(r, 400))
+      }
+      if (frames.length === 0) {
         setMsg({ ok:false, text:'Could not capture photo. Please try again.' }); return
       }
 
-      setStatus('Scanning facial features...')
+      setStatus('Building face profile...')
       const { data } = await api.post('/api/employees/register', {
         name: form.name.trim(),
         employee_id: form.employee_id.trim(),
         department: form.department.trim(),
-        face_image: image,
+        face_images: frames,
       })
       setMsg({ ok:true, text:`${data.name} registered successfully.` })
       setTimeout(() => nav('/admin/dashboard'), 1500)
@@ -50,8 +55,8 @@ export default function RegisterEmployee() {
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill in the details, then tap Register. The system will capture the face
-          and store its unique facial geometry automatically.
+          Tap Register — the system captures 3 face scans automatically and stores
+          your unique facial geometry (512 points). No extra buttons needed.
         </p>
 
         <label className="field-label">Full Name *</label>
