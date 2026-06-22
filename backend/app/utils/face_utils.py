@@ -14,22 +14,18 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 logger = logging.getLogger(__name__)
 
-# ArcFace is a state-of-the-art face recognition model. It encodes a person's
-# facial geometry into a 512-d vector that stays stable across lighting, pose,
-# expression and clothing changes — exactly what an attendance system needs.
+# ArcFace encodes facial geometry (512-d) — stable across lighting, pose, glasses, beard.
 MODEL_NAME = "ArcFace"
+DETECTOR_BACKENDS = ["retinaface", "opencv", "ssd"]
 
-# Detectors tried in order. RetinaFace is the most accurate (finds + aligns the
-# face precisely); opencv is a fast, dependency-free fallback. We never embed
-# the whole picture — only the detected, aligned face.
-DETECTOR_BACKENDS = ["retinaface", "opencv"]
+# Cosine distance: lower = more similar. DeepFace reference for ArcFace is ~0.68.
+# We use 0.78 so daily variation (lighting, angle, expression) still matches.
+FACE_MATCH_THRESHOLD = 0.78
 
-# Cosine-distance threshold for ArcFace. DeepFace's reference value is 0.68.
-FACE_MATCH_THRESHOLD = 0.68
+# Only reject as "ambiguous" when two people score nearly identically.
+MATCH_MARGIN = 0.04
 
-# The best candidate must beat the runner-up by this margin, otherwise the
-# result is treated as ambiguous and rejected (prevents wrong person matches).
-MATCH_MARGIN = 0.12
+MAX_STORED_SAMPLES = 6
 
 
 @contextlib.contextmanager
@@ -63,7 +59,6 @@ def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _represent(img_array: np.ndarray, require_face: bool) -> Optional[np.ndarray]:
-    """Return a face embedding, or None if no real face could be detected."""
     from deepface import DeepFace
 
     for backend in DETECTOR_BACKENDS:
@@ -78,8 +73,6 @@ def _represent(img_array: np.ndarray, require_face: bool) -> Optional[np.ndarray
                 )
             if not reps:
                 continue
-
-            # Keep the largest face if several are present.
             if len(reps) > 1:
                 reps = sorted(
                     reps,
@@ -89,23 +82,19 @@ def _represent(img_array: np.ndarray, require_face: bool) -> Optional[np.ndarray
                 )
             return np.array(reps[0]["embedding"], dtype=np.float64)
         except Exception as e:
-            logger.warning("DeepFace detector '%s' failed: %s", backend, e)
-            continue
-
+            logger.warning("Detector '%s' failed: %s", backend, e)
     return None
 
 
 def extract_embedding(base64_image: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
-    """Detect a face and return its embedding vector (for registration)."""
     try:
         img_array = decode_base64_image(base64_image)
         if img_array.size == 0 or min(img_array.shape[:2]) < 80:
-            return None, "The photo is too small. Please capture again."
+            return None, "Photo too small. Move closer to the camera."
 
         emb = _represent(img_array, require_face=True)
         if emb is None:
-            return None, ("No face detected. Move closer, face the camera "
-                          "directly, and make sure the lighting is good.")
+            return None, "No face detected. Face the camera in good lighting."
         return emb, None
     except Exception as e:
         logger.exception("extract_embedding error")
@@ -117,14 +106,12 @@ def serialize_embeddings(embeddings: List[np.ndarray]) -> bytes:
 
 
 def _load_embeddings(enc_bytes) -> List[np.ndarray]:
-    """Supports both the new list format and the old single-vector format."""
     data = pickle.loads(enc_bytes)
     if isinstance(data, list):
         return [np.asarray(d, dtype=np.float64).reshape(-1) for d in data]
     return [np.asarray(data, dtype=np.float64).reshape(-1)]
 
 
-# Backwards-compatible single-sample registration helper.
 def encode_face(base64_image: str) -> Tuple[Optional[bytes], Optional[str]]:
     emb, err = extract_embedding(base64_image)
     if emb is None:
@@ -132,63 +119,78 @@ def encode_face(base64_image: str) -> Tuple[Optional[bytes], Optional[str]]:
     return serialize_embeddings([emb]), None
 
 
-def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float]:
-    """Identify the person at check-in/out. Returns (employee_id, confidence%)."""
-    try:
-        img_array = decode_base64_image(base64_image)
-        probe = _represent(img_array, require_face=True)
-        if probe is None:
-            return None, 0.0
+def _confidence_pct(dist: float) -> float:
+    return round(max(0.0, min(100.0, (1.0 - dist / FACE_MATCH_THRESHOLD) * 100)), 2)
 
-        # Best (smallest) cosine distance per employee across all their samples.
+
+def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
+    """Returns (employee_id, confidence%, error_reason)."""
+    try:
+        probe = _represent(decode_base64_image(base64_image), require_face=True)
+        if probe is None:
+            return None, 0.0, "no_face"
+
         per_emp = []
+        skipped_old = 0
         for emp_id, enc_bytes in stored_encodings:
             try:
                 embs = _load_embeddings(enc_bytes)
             except Exception:
                 continue
-            dists = [
-                _cosine_distance(probe, e)
-                for e in embs
-                if e.shape == probe.shape
-            ]
+            dists = [_cosine_distance(probe, e) for e in embs if e.shape == probe.shape]
+            if not embs:
+                skipped_old += 1
+            elif not dists and embs:
+                skipped_old += 1
             if dists:
                 per_emp.append((emp_id, min(dists)))
 
         if not per_emp:
-            return None, 0.0
+            if skipped_old:
+                return None, 0.0, "outdated_profile"
+            return None, 0.0, "no_match"
 
         per_emp.sort(key=lambda x: x[1])
         best_id, best_dist = per_emp[0]
         second_dist = per_emp[1][1] if len(per_emp) > 1 else float("inf")
 
         if best_dist > FACE_MATCH_THRESHOLD:
-            return None, 0.0
-        if (second_dist - best_dist) < MATCH_MARGIN and second_dist <= FACE_MATCH_THRESHOLD:
-            logger.info("Ambiguous match (best=%.3f second=%.3f) — rejected",
-                        best_dist, second_dist)
-            return None, 0.0
+            return None, 0.0, "no_match"
 
-        confidence = round(max(0.0, (FACE_MATCH_THRESHOLD - best_dist) / FACE_MATCH_THRESHOLD) * 100, 2)
-        return best_id, confidence
+        if len(per_emp) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
+            if (second_dist - best_dist) < MATCH_MARGIN:
+                return None, 0.0, "ambiguous"
+
+        return best_id, _confidence_pct(best_dist), None
     except Exception:
         logger.exception("match_face error")
-        return None, 0.0
+        return None, 0.0, "error"
+
+
+def augment_stored_encoding(enc_bytes: bytes, new_emb: np.ndarray, confidence: float) -> Optional[bytes]:
+    """Add a successful check-in sample so the profile adapts over time."""
+    if confidence < 70.0:
+        return None
+    try:
+        embs = _load_embeddings(enc_bytes)
+        if not embs or embs[0].shape != new_emb.shape:
+            return None
+        dists = [_cosine_distance(new_emb, e) for e in embs]
+        if min(dists) < 0.15:
+            return None  # too similar to an existing sample — skip
+        embs.append(new_emb.reshape(-1))
+        if len(embs) > MAX_STORED_SAMPLES:
+            embs = embs[-MAX_STORED_SAMPLES:]
+        return serialize_embeddings(embs)
+    except Exception:
+        return None
 
 
 def warmup_model():
-    """Preload the recognition model + detector weights at startup."""
     try:
         from deepface import DeepFace
         with _quiet_deepface():
             DeepFace.build_model(MODEL_NAME)
-            # Trigger RetinaFace weight download/caching.
-            dummy = (np.random.rand(160, 160, 3) * 255).astype("uint8")
-            try:
-                DeepFace.extract_faces(dummy, detector_backend="retinaface",
-                                       enforce_detection=False, align=True)
-            except Exception:
-                pass
         logger.info("Face model (%s) warmed up", MODEL_NAME)
     except Exception as e:
         logger.warning("Model warmup failed: %s", e)

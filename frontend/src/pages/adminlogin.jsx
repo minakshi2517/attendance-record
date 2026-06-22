@@ -3,13 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import useAuthStore from '../store/authstore'
 import api from '../api'
 
-const s = {
-  page:  { maxWidth:400, margin:'80px auto', padding:32, background:'#1e293b', borderRadius:16 },
-  title: { fontSize:24, fontWeight:700, marginBottom:24, color:'#818cf8' },
-  btn:   { background:'#6366f1', color:'#fff', width:'100%', padding:14, fontSize:16, marginTop:8 },
-  err:   { color:'#ef4444', marginTop:12, fontSize:14 },
-}
-
 export default function AdminLogin() {
   const [form, setForm] = useState({ username:'', password:'' })
   const [err,  setErr]  = useState('')
@@ -28,23 +21,25 @@ export default function AdminLogin() {
       nav('/admin/dashboard')
     } catch {
       setErr('Incorrect username or password.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   return (
-    <div style={s.page}>
-      <h2 style={s.title}>Admin Login</h2>
-      <input placeholder="Username" value={form.username}
-        onChange={e => setForm({...form, username: e.target.value})} />
-      <input placeholder="Password" type="password" value={form.password}
-        onChange={e => setForm({...form, password: e.target.value})}
-        onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-      <button style={s.btn} onClick={handleSubmit} disabled={loading}>
-        {loading ? 'Signing in...' : 'Login'}
-      </button>
-      {err && <div style={s.err}>{err}</div>}
+    <div className="page" style={{maxWidth:400, marginTop:40}}>
+      <div className="register-card">
+        <h2 className="page-title" style={{fontSize:22, marginBottom:20}}>Admin Login</h2>
+        <label className="field-label">Username</label>
+        <input placeholder="Username" value={form.username}
+          onChange={e => setForm({...form, username: e.target.value})} />
+        <label className="field-label">Password</label>
+        <input placeholder="Password" type="password" value={form.password}
+          onChange={e => setForm({...form, password: e.target.value})}
+          onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+        <button className="btn-primary" style={{width:'100%', padding:14, marginTop:4}} onClick={handleSubmit} disabled={loading}>
+          {loading ? 'Signing in...' : 'Login'}
+        </button>
+        {err && <div className="alert alert-error" style={{marginTop:12}}>{err}</div>}
+      </div>
     </div>
   )
 }

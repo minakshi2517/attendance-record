@@ -6,38 +6,57 @@ from datetime import datetime, timezone, timedelta
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import match_face
+from app.utils.face_utils import match_face, extract_embedding, augment_stored_encoding
 from app.config import settings
 
 router = APIRouter()
 
 class FaceRequest(BaseModel):
-    image: str   # base64
+    image: str
+
+MATCH_ERRORS = {
+    "no_face":          "No face detected. Look at the camera and try again.",
+    "no_match":           "Face not recognized. If you are new, ask admin to register you.",
+    "outdated_profile":   "Your face profile is outdated. Ask admin to re-register you with new photos.",
+    "ambiguous":          "Could not identify you clearly. Please try again.",
+    "error":              "Face scan failed. Please try again.",
+}
 
 def load_encodings(db):
-    """Saare active employees ke face encodings load karo DB se"""
     emps = db.query(models.Employee).filter(
         models.Employee.is_active == True,
         models.Employee.face_encoding != None
     ).all()
     return [(e.id, e.face_encoding) for e in emps]
 
-@router.post("/checkin")
-def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
+def _identify(payload: FaceRequest, db: Session):
     encodings = load_encodings(db)
     if not encodings:
         raise HTTPException(404, "No registered employees found.")
 
-    emp_id, confidence = match_face(payload.image, encodings)
+    emp_id, confidence, reason = match_face(payload.image, encodings)
     if emp_id is None:
-        raise HTTPException(401, "Face not recognized. Try again with a similar pose and lighting to your registration photo.")
+        raise HTTPException(401, MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"]))
 
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
 
-    # Check whether already checked in today
+    # Adapt profile: store this successful scan so future matches improve over time.
+    probe, _ = extract_embedding(payload.image)
+    if probe is not None and emp and emp.face_encoding:
+        updated = augment_stored_encoding(emp.face_encoding, probe, confidence)
+        if updated:
+            emp.face_encoding = updated
+            db.commit()
+
+    return emp, confidence
+
+@router.post("/checkin")
+def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
+    emp, confidence = _identify(payload, db)
+
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     existing = db.query(models.AttendanceLog).filter(
-        models.AttendanceLog.employee_id == emp_id,
+        models.AttendanceLog.employee_id == emp.id,
         models.AttendanceLog.check_in >= today,
         models.AttendanceLog.check_out == None,
     ).first()
@@ -50,7 +69,7 @@ def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
         }
 
     now = datetime.now(timezone.utc)
-    log = models.AttendanceLog(employee_id=emp_id, check_in=now, confidence=confidence)
+    log = models.AttendanceLog(employee_id=emp.id, check_in=now, confidence=confidence)
     db.add(log); db.commit(); db.refresh(log)
     return {
         "status": "checked_in",
@@ -62,19 +81,11 @@ def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
 
 @router.post("/checkout")
 def check_out(payload: FaceRequest, db: Session = Depends(get_db)):
-    encodings = load_encodings(db)
-    if not encodings:
-        raise HTTPException(404, "No registered employees found.")
-
-    emp_id, confidence = match_face(payload.image, encodings)
-    if emp_id is None:
-        raise HTTPException(401, "Face not recognized. Try again with a similar pose and lighting to your registration photo.")
-
-    emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
+    emp, confidence = _identify(payload, db)
 
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     log   = db.query(models.AttendanceLog).filter(
-        models.AttendanceLog.employee_id == emp_id,
+        models.AttendanceLog.employee_id == emp.id,
         models.AttendanceLog.check_in >= today,
         models.AttendanceLog.check_out == None,
     ).first()
@@ -82,7 +93,6 @@ def check_out(payload: FaceRequest, db: Session = Depends(get_db)):
     if not log:
         raise HTTPException(400, "Please check in first.")
 
-    # Minimum time required between check-in and check-out
     now           = datetime.now(timezone.utc)
     lockout_until = log.check_in + timedelta(minutes=settings.CHECKOUT_LOCKOUT_MINUTES)
     if now < lockout_until:
@@ -122,7 +132,7 @@ def today_attendance(db: Session = Depends(get_db), admin=Depends(get_current_ad
             "check_in": log.check_in.isoformat() if log.check_in else None,
             "check_out": log.check_out.isoformat() if log.check_out else None,
             "duration": dur,
-            "status": "Present" if log.check_out else "Office mein hai",
+            "status": "Completed" if log.check_out else "In Office",
             "confidence": log.confidence,
         })
     return result
@@ -156,7 +166,7 @@ def history(
             "check_in":  log.check_in.isoformat()  if log.check_in  else None,
             "check_out": log.check_out.isoformat() if log.check_out else None,
             "duration": dur,
-            "status": "Present" if log.check_out else "Office mein hai",
+            "status": "Completed" if log.check_out else "In Office",
         })
     return result
 
