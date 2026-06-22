@@ -13,7 +13,7 @@ export default function CheckInOut() {
   const submit = async (mode) => {
     if (!ready) { setResult({ ok:false, msg:'Camera is starting, please wait...' }); return }
     setLoading(true); setResult(null)
-    setStatus('Scanning face...')
+    setStatus('Scanning facial geometry...')
     try {
       const image = capture()
       if (!image) { setResult({ ok:false, msg:'Could not capture. Please try again.' }); return }
@@ -31,15 +31,27 @@ export default function CheckInOut() {
 
   return (
     <div className="checkin-page">
+      {loading && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(15,23,42,0.92)',
+          display:'flex', flexDirection:'column', alignItems:'center',
+          justifyContent:'center', zIndex:300, padding:24, textAlign:'center',
+        }}>
+          <div style={{fontSize:40, marginBottom:16}}>⏳</div>
+          <p style={{color:'#e2e8f0', fontSize:16, fontWeight:600, marginBottom:8}}>{status}</p>
+          <p style={{color:'#64748b', fontSize:13}}>Matching your face points — please wait...</p>
+        </div>
+      )}
+
       <h1 className="checkin-title">Face Attendance</h1>
-      <p className="checkin-sub">Look at the camera and tap Check In or Check Out</p>
+      <p className="checkin-sub">Look at the camera — only you will be matched, not someone else</p>
 
       <div className={`camera-wrap ${loading ? 'scanning' : ''}`}>
         <video ref={videoRef} className="camera-video" muted playsInline autoPlay />
       </div>
 
       <p className="camera-status">
-        {loading ? status : error ? <span style={{color:'#ef4444'}}>{error}</span> : ready ? 'Camera ready' : 'Starting camera...'}
+        {error ? <span style={{color:'#ef4444'}}>{error}</span> : ready ? 'Camera ready — one person in frame' : 'Starting camera...'}
       </p>
 
       <div className="checkin-btns">

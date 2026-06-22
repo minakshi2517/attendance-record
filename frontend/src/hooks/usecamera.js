@@ -57,7 +57,20 @@ export default function useCamera() {
     return c.toDataURL('image/jpeg', JPEG_QUALITY)
   }, [])
 
+  const captureMultiple = useCallback(async (count = 3, gapMs = 700, onStep) => {
+    const shots = []
+    for (let i = 0; i < count; i += 1) {
+      if (onStep) onStep(i + 1, count)
+      const img = capture()
+      if (img) shots.push(img)
+      if (i < count - 1) {
+        await new Promise(r => setTimeout(r, gapMs))
+      }
+    }
+    return shots
+  }, [capture])
+
   useEffect(() => () => stop(), [stop])
 
-  return { videoRef, ready, error, start, stop, capture }
+  return { videoRef, ready, error, start, stop, capture, captureMultiple }
 }

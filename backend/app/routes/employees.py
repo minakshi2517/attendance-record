@@ -5,7 +5,7 @@ from typing import Optional, List
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import extract_embedding, serialize_embeddings
+from app.utils.face_utils import build_profile, find_duplicate, extract_embedding
 
 router = APIRouter()
 
@@ -31,19 +31,28 @@ def _collect_images(face_image, face_images) -> List[str]:
     return [i for i in imgs if i]
 
 
-def _build_encoding(images: List[str]) -> bytes:
-    """Turn one or more face photos into stored embeddings, or raise 422."""
-    embeddings = []
-    last_err = None
+def _load_face_encodings(db):
+    emps = db.query(models.Employee).filter(models.Employee.face_encoding != None).all()
+    return [(e.id, e.face_encoding) for e in emps]
+
+
+def _build_encoding(images: List[str], db, exclude_emp_id=None) -> bytes:
+    """Turn enrollment photos into geometry-only face profile, or raise 422."""
+    face_bytes, err = build_profile(images)
+    if face_bytes is None:
+        raise HTTPException(422, err or "No face detected in the captured photos. Please try again.")
+
+    stored = _load_face_encodings(db)
     for img in images:
-        emb, err = extract_embedding(img)
-        if emb is not None:
-            embeddings.append(emb)
-        else:
-            last_err = err
-    if not embeddings:
-        raise HTTPException(422, last_err or "No face detected in the captured photos. Please try again.")
-    return serialize_embeddings(embeddings)
+        emb, _ = extract_embedding(img)
+        if emb is None:
+            continue
+        dup_id = find_duplicate(emb, stored, exclude_emp_id=exclude_emp_id)
+        if dup_id is not None:
+            dup = db.query(models.Employee).filter(models.Employee.id == dup_id).first()
+            name = dup.name if dup else "another employee"
+            raise HTTPException(409, f"This face is already registered as {name}.")
+    return face_bytes
 
 
 @router.post("/register")
@@ -54,7 +63,7 @@ def register_employee(payload: EmployeeCreate, db: Session = Depends(get_db), ad
     images = _collect_images(payload.face_image, payload.face_images)
     if not images:
         raise HTTPException(422, "At least one face photo is required.")
-    face_bytes = _build_encoding(images)
+    face_bytes = _build_encoding(images, db)
 
     emp = models.Employee(
         name          = payload.name,
@@ -94,7 +103,7 @@ def update_employee(employee_id: str, payload: EmployeeUpdate, db: Session = Dep
 
     images = _collect_images(payload.face_image, payload.face_images)
     if images:
-        emp.face_encoding = _build_encoding(images)
+        emp.face_encoding = _build_encoding(images, db, exclude_emp_id=emp.id)
 
     db.commit(); db.refresh(emp)
     return {

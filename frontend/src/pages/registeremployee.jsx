@@ -4,7 +4,7 @@ import useCamera from '../hooks/usecamera'
 import api from '../api'
 
 export default function RegisterEmployee() {
-  const { videoRef, ready, error, start, capture } = useCamera()
+  const { videoRef, ready, error, start, captureMultiple } = useCamera()
   const [form, setForm]       = useState({ name:'', employee_id:'', department:'' })
   const [loading, setLoading] = useState(false)
   const [status,  setStatus]  = useState('')
@@ -22,25 +22,27 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Capturing face...')
+    setStatus('Scan 1 of 3 — look straight at the camera...')
     try {
-      const image = capture()
-      if (!image) {
-        setMsg({ ok:false, text:'Could not capture photo. Please try again.' }); return
+      const face_images = await captureMultiple(3, 800, (step, total) => {
+        setStatus(`Scan ${step} of ${total} — hold still, one person only...`)
+      })
+      if (face_images.length < 2) {
+        setMsg({ ok:false, text:'Could not capture face samples. Please try again.' }); return
       }
 
-      setStatus('Building face profile — please wait 30-60 sec, do not close...')
+      setStatus('Saving face geometry — please wait 30-90 sec, do not close...')
       const { data } = await api.post('/api/employees/register', {
         name: form.name.trim(),
         employee_id: form.employee_id.trim(),
         department: form.department.trim(),
-        face_image: image,
+        face_images,
       })
       setMsg({ ok:true, text:`${data.name} registered successfully!` })
       setTimeout(() => nav('/admin/dashboard'), 1200)
     } catch (err) {
       if (err.code === 'ECONNABORTED') {
-        setMsg({ ok:false, text:'Server took too long. Please try again — the first scan is always slowest.' })
+        setMsg({ ok:false, text:'Server took too long. Please try again — first scan is always slowest.' })
       } else if (!err.response) {
         setMsg({ ok:false, text:'Network error. Check your internet and try again.' })
       } else {
@@ -62,15 +64,18 @@ export default function RegisterEmployee() {
         }}>
           <div style={{fontSize:40, marginBottom:16}}>⏳</div>
           <p style={{color:'#e2e8f0', fontSize:16, fontWeight:600, marginBottom:8}}>{status}</p>
-          <p style={{color:'#64748b', fontSize:13}}>First-time face scan downloads AI model — can take up to 60 seconds. Please wait.</p>
+          <p style={{color:'#64748b', fontSize:13}}>
+            Like phone face unlock — only your facial points are saved, not the photo.
+            First scan may take up to 90 seconds.
+          </p>
         </div>
       )}
 
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill details, face the camera, tap Register. One photo is enough — the system
-          stores your facial geometry automatically.
+          Fill details, face the camera, tap Register. The system captures 3 quick scans
+          and saves only facial geometry — lighting and clothes do not matter.
         </p>
 
         <label className="field-label">Full Name *</label>
@@ -86,7 +91,7 @@ export default function RegisterEmployee() {
 
         <p className="camera-status">
           {error ? <span style={{color:'#ef4444'}}>{error}</span>
-            : ready ? 'Camera ready — face the camera and tap Register'
+            : ready ? 'Camera ready — one person only, good light, hold still on Register'
             : 'Starting camera...'}
         </p>
 

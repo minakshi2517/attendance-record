@@ -13,6 +13,7 @@ pydantic-settings==2.2.1
 aiosqlite==0.20.0
 email-validator==2.1.1
 psycopg2-binary==2.9.9
+opencv-python-headless==4.10.0.84
 deepface==0.0.100
 tensorflow-cpu==2.21.0
 tf-keras==2.21.0

@@ -15,11 +15,14 @@ class FaceRequest(BaseModel):
     image: str
 
 MATCH_ERRORS = {
-    "no_face":          "No face detected. Look at the camera and try again.",
-    "no_match":           "Face not recognized. If you are new, ask admin to register you.",
-    "outdated_profile":   "Your face profile is outdated. Ask admin to re-register you with new photos.",
-    "ambiguous":          "Could not identify you clearly. Please try again.",
-    "error":              "Face scan failed. Please try again.",
+    "no_face":          "No face detected. Look straight at the camera.",
+    "multiple_faces":   "Only one person should be in the frame.",
+    "face_too_small":   "Move closer to the camera.",
+    "too_blurry":       "Hold still — image is too blurry.",
+    "no_match":         "Face not recognized. Ask admin to register you.",
+    "outdated_profile": "Your face profile is outdated. Ask admin to re-register you.",
+    "ambiguous":        "Could not identify you clearly. Please try again.",
+    "error":            "Face scan failed. Please try again.",
 }
 
 def load_encodings(db):

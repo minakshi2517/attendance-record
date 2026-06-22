@@ -15,18 +15,20 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 logger = logging.getLogger(__name__)
 
-# ArcFace = industry standard. Stores 512 numbers from facial geometry
-# (eyes, nose, mouth, jaw). Clothes/lighting/background do NOT matter.
+# ArcFace stores 512-d vectors from facial geometry (eyes, nose, jaw).
+# Like phone face unlock — clothes, background, and lighting should not matter.
 MODEL_NAME = "ArcFace"
 EMBEDDING_DIM = 512
+PACK_VERSION = 3
 
 DETECTORS = ["retinaface", "opencv", "ssd"]
 
-# STRICT thresholds — prefer "not recognized" over wrong person.
-# ArcFace cosine distance: lower = more similar. DeepFace default ~0.68.
-FACE_MATCH_THRESHOLD = 0.55
-MATCH_MARGIN = 0.10          # 2nd person must be at least this much farther
-MIN_MATCH_CONFIDENCE = 55.0  # reject weak matches (%)
+# Strict matching — wrong person is worse than "not recognized".
+FACE_MATCH_THRESHOLD = 0.48
+MATCH_MARGIN = 0.12
+MIN_MATCH_CONFIDENCE = 65.0
+MIN_FACE_FRAME_RATIO = 0.05   # face must cover >= 5% of frame
+MIN_BLUR_VARIANCE = 35.0      # reject very blurry captures
 
 
 @contextlib.contextmanager
@@ -65,6 +67,43 @@ def _save_temp(img_array: np.ndarray) -> str:
     return f.name
 
 
+def _normalize_lighting(img_array: np.ndarray) -> np.ndarray:
+    """Reduce lighting/shadow impact before embedding (phone-lock style)."""
+    try:
+        import cv2
+        lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        merged = cv2.merge((l, a, b))
+        return cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+    except Exception:
+        return img_array
+
+
+def _face_crop(img_array: np.ndarray, area: dict) -> np.ndarray:
+    if not area:
+        return img_array
+    h, w = img_array.shape[:2]
+    x = max(0, int(area.get("x", 0)))
+    y = max(0, int(area.get("y", 0)))
+    fw = min(w - x, int(area.get("w", w)))
+    fh = min(h - y, int(area.get("h", h)))
+    if fw <= 0 or fh <= 0:
+        return img_array
+    return img_array[y:y + fh, x:x + fw]
+
+
+def _is_sharp_enough(img_array: np.ndarray, area: dict) -> bool:
+    try:
+        import cv2
+        crop = _face_crop(img_array, area)
+        gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= MIN_BLUR_VARIANCE
+    except Exception:
+        return True
+
+
 def _pick_largest_face(reps: list) -> dict:
     if len(reps) == 1:
         return reps[0]
@@ -76,16 +115,17 @@ def _pick_largest_face(reps: list) -> dict:
 
 def _face_big_enough(area: dict, img_shape) -> bool:
     if not area:
-        return True
+        return False
     h, w = img_shape[:2]
     face_area = area.get("w", 0) * area.get("h", 0)
-    return face_area >= (w * h * 0.04)  # face >= 4% of frame
+    return face_area >= (w * h * MIN_FACE_FRAME_RATIO)
 
 
-def _represent(img_array: np.ndarray, strict_only: bool = False) -> Tuple[Optional[np.ndarray], Optional[dict]]:
-    """Detect + align face, return 512-d ArcFace embedding."""
+def _represent(img_array: np.ndarray, strict_only: bool = True) -> Tuple[Optional[np.ndarray], Optional[dict], Optional[str]]:
+    """Detect, align face, return 512-d ArcFace embedding + facial area."""
     from deepface import DeepFace
 
+    img_array = _normalize_lighting(img_array)
     temp_path = None
     try:
         temp_path = _save_temp(img_array)
@@ -94,6 +134,7 @@ def _represent(img_array: np.ndarray, strict_only: bool = False) -> Tuple[Option
         paths = [img_array]
 
     strict_modes = [True] if strict_only else [True, False]
+    last_reason = "no_face"
 
     try:
         for backend in DETECTORS:
@@ -110,17 +151,24 @@ def _represent(img_array: np.ndarray, strict_only: bool = False) -> Tuple[Option
                             )
                         if not reps:
                             continue
+                        if strict and len(reps) > 1:
+                            last_reason = "multiple_faces"
+                            continue
                         best = _pick_largest_face(reps)
                         area = best.get("facial_area")
                         if strict and not _face_big_enough(area, img_array.shape):
+                            last_reason = "face_too_small"
+                            continue
+                        if strict and not _is_sharp_enough(img_array, area):
+                            last_reason = "too_blurry"
                             continue
                         emb = np.array(best["embedding"], dtype=np.float64)
                         if emb.shape[0] != EMBEDDING_DIM:
                             continue
-                        return emb, area
+                        return emb, area, None
                     except Exception as e:
                         logger.debug("represent %s strict=%s: %s", backend, strict, e)
-        return None, None
+        return None, None, last_reason
     finally:
         if temp_path:
             try:
@@ -129,10 +177,19 @@ def _represent(img_array: np.ndarray, strict_only: bool = False) -> Tuple[Option
                 pass
 
 
+def _centroid(embs: List[np.ndarray]) -> np.ndarray:
+    if len(embs) == 1:
+        return _normalize(embs[0])
+    stacked = np.stack([_normalize(e) for e in embs], axis=0)
+    return _normalize(np.mean(stacked, axis=0))
+
+
 def _pack_embeddings(embs: List[np.ndarray]) -> bytes:
+    centroid = _centroid(embs)
     return pickle.dumps({
         "model": MODEL_NAME,
-        "version": 2,
+        "version": PACK_VERSION,
+        "centroid": centroid.reshape(-1),
         "embeddings": [e.reshape(-1) for e in embs],
     })
 
@@ -142,15 +199,37 @@ def _unpack(enc_bytes) -> List[np.ndarray]:
     if isinstance(data, dict):
         if data.get("model") and data.get("model") != MODEL_NAME:
             return []
+        vectors = []
+        centroid = data.get("centroid")
+        if centroid is not None:
+            arr = np.asarray(centroid, dtype=np.float64).reshape(-1)
+            if len(arr) == EMBEDDING_DIM:
+                vectors.append(arr)
+        for e in data.get("embeddings", []):
+            arr = np.asarray(e, dtype=np.float64).reshape(-1)
+            if len(arr) == EMBEDDING_DIM:
+                vectors.append(arr)
+        return vectors
+    if isinstance(data, list):
         return [
             np.asarray(e, dtype=np.float64).reshape(-1)
-            for e in data.get("embeddings", [])
+            for e in data
             if len(np.asarray(e).reshape(-1)) == EMBEDDING_DIM
         ]
-    if isinstance(data, list):
-        return [np.asarray(e, dtype=np.float64).reshape(-1) for e in data if len(np.asarray(e).reshape(-1)) == EMBEDDING_DIM]
     arr = np.asarray(data, dtype=np.float64).reshape(-1)
     return [arr] if len(arr) == EMBEDDING_DIM else []
+
+
+REASON_MESSAGES = {
+    "no_face": "No face detected. Look straight at the camera.",
+    "multiple_faces": "Only one person should be in the frame.",
+    "face_too_small": "Move closer to the camera so your face fills the frame.",
+    "too_blurry": "Image is blurry. Hold still and ensure good light.",
+}
+
+
+def _reason_message(reason: Optional[str]) -> str:
+    return REASON_MESSAGES.get(reason or "no_face", REASON_MESSAGES["no_face"])
 
 
 def extract_embedding(base64_image: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
@@ -158,13 +237,30 @@ def extract_embedding(base64_image: str) -> Tuple[Optional[np.ndarray], Optional
         img = decode_base64_image(base64_image)
         if img.size == 0 or min(img.shape[:2]) < 80:
             return None, "Move closer to the camera."
-        emb, _ = _represent(img, strict_only=False)
+        emb, _, reason = _represent(img, strict_only=True)
         if emb is None:
-            return None, "No face detected. Look straight at the camera in good light."
+            return None, _reason_message(reason)
         return emb, None
     except Exception as e:
         logger.exception("extract_embedding")
         return None, f"Face scan failed: {e}"
+
+
+def build_profile(images: List[str]) -> Tuple[Optional[bytes], Optional[str]]:
+    """Build stored face profile from 1-3 enrollment photos."""
+    embeddings = []
+    last_err = None
+    for img in images:
+        emb, err = extract_embedding(img)
+        if emb is not None:
+            embeddings.append(emb)
+        else:
+            last_err = err
+    if not embeddings:
+        return None, last_err or "No valid face found. Please try again."
+    if len(embeddings) == 1:
+        return None, "Capture at least 2 face samples for a reliable profile."
+    return _pack_embeddings(embeddings), None
 
 
 def serialize_embeddings(embeddings: List[np.ndarray]) -> bytes:
@@ -182,13 +278,32 @@ def _confidence(dist: float) -> float:
     return round(max(0.0, min(100.0, (1.0 - dist / FACE_MATCH_THRESHOLD) * 100)), 2)
 
 
+def _best_distance(probe: np.ndarray, stored: List[np.ndarray]) -> float:
+    return min(_cosine_dist(probe, e) for e in stored)
+
+
+def find_duplicate(probe: np.ndarray, stored_encodings: list, exclude_emp_id: Optional[int] = None) -> Optional[int]:
+    """Return employee id if this face already belongs to someone else."""
+    for emp_id, enc_bytes in stored_encodings:
+        if exclude_emp_id is not None and emp_id == exclude_emp_id:
+            continue
+        try:
+            embs = _unpack(enc_bytes)
+        except Exception:
+            continue
+        if not embs:
+            continue
+        if _best_distance(probe, embs) <= FACE_MATCH_THRESHOLD:
+            return emp_id
+    return None
+
+
 def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
     try:
         img = decode_base64_image(base64_image)
-        # Attendance: STRICT only — no sloppy fallback that causes wrong matches.
-        probe, _ = _represent(img, strict_only=True)
+        probe, _, reason = _represent(img, strict_only=True)
         if probe is None:
-            return None, 0.0, "no_face"
+            return None, 0.0, reason or "no_face"
 
         scores, outdated = [], 0
         for emp_id, enc_bytes in stored_encodings:
@@ -199,8 +314,7 @@ def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int]
             if not embs:
                 outdated += 1
                 continue
-            dists = [_cosine_dist(probe, e) for e in embs]
-            scores.append((emp_id, min(dists)))
+            scores.append((emp_id, _best_distance(probe, embs)))
 
         if not scores:
             return None, 0.0, "outdated_profile" if outdated else "no_match"
@@ -218,7 +332,7 @@ def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int]
 
         if len(scores) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
             if (second_dist - best_dist) < MATCH_MARGIN:
-                logger.info("Rejected ambiguous: best=%.3f second=%.3f", best_dist, second_dist)
+                logger.info("Rejected ambiguous match: best=%.3f second=%.3f", best_dist, second_dist)
                 return None, 0.0, "ambiguous"
 
         return best_id, conf, None
