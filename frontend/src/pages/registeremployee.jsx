@@ -22,19 +22,23 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Capturing face — hold still...')
+    setStatus('Scan 1 of 2 — look straight at the camera...')
     try {
-      const blob = await captureBlob()
-      if (!blob) {
+      const blob1 = await captureBlob()
+      if (!blob1) {
         setMsg({ ok:false, text:'Could not capture face. Please try again.' }); return
       }
+      setStatus('Scan 2 of 2 — hold still...')
+      await new Promise(r => setTimeout(r, 800))
+      const blob2 = await captureBlob()
 
       setStatus('Saving face geometry — please wait 30-90 sec, do not close...')
       const body = new FormData()
       body.append('name', form.name.trim())
       body.append('employee_id', form.employee_id.trim())
       if (form.department.trim()) body.append('department', form.department.trim())
-      body.append('face_image', blob, 'face.jpg')
+      body.append('face_image', blob1, 'face1.jpg')
+      if (blob2) body.append('face_image_2', blob2, 'face2.jpg')
 
       const { data } = await api.post('/api/employees/register', body)
       setMsg({ ok:true, text:`${data.name} registered successfully!` })
@@ -73,8 +77,7 @@ export default function RegisterEmployee() {
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill details, face the camera, tap Register. One photo is enough —
-          the system saves only facial geometry, not the image.
+          Fill details, face the camera, tap Register. Two quick scans build a stronger face profile.
         </p>
 
         <label className="field-label">Full Name *</label>

@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import match_face
+from app.utils.face_utils import match_face, match_face_bytes
 from app.config import settings
 
 router = APIRouter()
@@ -19,7 +19,7 @@ MATCH_ERRORS = {
     "multiple_faces":   "Only one person should be in the frame.",
     "face_too_small":   "Move closer to the camera.",
     "too_blurry":       "Hold still — image is too blurry.",
-    "no_match":         "Face not recognized. Ask admin to register you.",
+    "no_match":         "Face not recognized. Look straight at the camera, move closer, or ask admin to re-register you.",
     "outdated_profile": "Your face profile is outdated. Ask admin to re-register you.",
     "ambiguous":        "Could not identify you clearly. Please try again.",
     "error":            "Face scan failed. Please try again.",
@@ -35,7 +35,7 @@ def load_encodings(db):
 def _identify(payload: FaceRequest, db: Session):
     encodings = load_encodings(db)
     if not encodings:
-        raise HTTPException(404, "No registered employees found.")
+        raise HTTPException(404, "No registered employees found. Ask admin to register team members first.")
 
     emp_id, confidence, reason = match_face(payload.image, encodings)
     if emp_id is None:
@@ -44,9 +44,35 @@ def _identify(payload: FaceRequest, db: Session):
     emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
     return emp, confidence
 
+
+async def _identify_upload(face_image: UploadFile, db: Session, extra: Optional[UploadFile] = None):
+    encodings = load_encodings(db)
+    if not encodings:
+        raise HTTPException(404, "No registered employees found. Ask admin to register team members first.")
+
+    raws = [await face_image.read()]
+    if extra is not None:
+        r2 = await extra.read()
+        if r2:
+            raws.append(r2)
+    raws = [r for r in raws if r]
+    if not raws:
+        raise HTTPException(422, "Face photo is required.")
+
+    emp_id, confidence, reason = match_face_bytes(raws, encodings)
+    if emp_id is None:
+        raise HTTPException(403, MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"]))
+
+    emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
+    return emp, confidence
+
 @router.post("/checkin")
-def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
-    emp, confidence = _identify(payload, db)
+async def check_in(
+    face_image: UploadFile = File(...),
+    face_image_2: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+):
+    emp, confidence = await _identify_upload(face_image, db, face_image_2)
 
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     existing = db.query(models.AttendanceLog).filter(
@@ -74,8 +100,12 @@ def check_in(payload: FaceRequest, db: Session = Depends(get_db)):
     }
 
 @router.post("/checkout")
-def check_out(payload: FaceRequest, db: Session = Depends(get_db)):
-    emp, confidence = _identify(payload, db)
+async def check_out(
+    face_image: UploadFile = File(...),
+    face_image_2: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+):
+    emp, confidence = await _identify_upload(face_image, db, face_image_2)
 
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     log   = db.query(models.AttendanceLog).filter(

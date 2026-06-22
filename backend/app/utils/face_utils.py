@@ -23,12 +23,13 @@ PACK_VERSION = 3
 
 DETECTORS = ["retinaface", "opencv", "ssd"]
 
-# Strict matching — wrong person is worse than "not recognized".
-FACE_MATCH_THRESHOLD = 0.48
-MATCH_MARGIN = 0.12
-MIN_MATCH_CONFIDENCE = 65.0
-MIN_FACE_FRAME_RATIO = 0.04
-MIN_BLUR_VARIANCE = 25.0
+# ArcFace cosine distance: lower = more similar. DeepFace verify default ~0.68.
+FACE_MATCH_THRESHOLD = 0.54
+MATCH_MARGIN = 0.08
+MIN_MATCH_CONFIDENCE = 52.0
+MIN_FACE_FRAME_RATIO = 0.035
+MIN_BLUR_VARIANCE = 20.0
+MIN_BLUR_VARIANCE_ATTENDANCE = 12.0
 
 
 @contextlib.contextmanager
@@ -112,12 +113,12 @@ def _face_crop(img_array: np.ndarray, area: dict) -> np.ndarray:
     return img_array[y:y + fh, x:x + fw]
 
 
-def _is_sharp_enough(img_array: np.ndarray, area: dict) -> bool:
+def _is_sharp_enough(img_array: np.ndarray, area: dict, min_variance: float = MIN_BLUR_VARIANCE) -> bool:
     try:
         import cv2
         crop = _face_crop(img_array, area)
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= MIN_BLUR_VARIANCE
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var()) >= min_variance
     except Exception:
         return True
 
@@ -131,15 +132,20 @@ def _pick_largest_face(reps: list) -> dict:
     ))
 
 
-def _face_big_enough(area: dict, img_shape) -> bool:
+def _face_big_enough(area: dict, img_shape, min_ratio: float = MIN_FACE_FRAME_RATIO) -> bool:
     if not area:
         return False
     h, w = img_shape[:2]
     face_area = area.get("w", 0) * area.get("h", 0)
-    return face_area >= (w * h * MIN_FACE_FRAME_RATIO)
+    return face_area >= (w * h * min_ratio)
 
 
-def _represent(img_array: np.ndarray, strict_only: bool = True) -> Tuple[Optional[np.ndarray], Optional[dict], Optional[str]]:
+def _represent(
+    img_array: np.ndarray,
+    strict_only: bool = True,
+    min_face_ratio: float = MIN_FACE_FRAME_RATIO,
+    min_blur: float = MIN_BLUR_VARIANCE,
+) -> Tuple[Optional[np.ndarray], Optional[dict], Optional[str]]:
     """Detect, align face, return 512-d ArcFace embedding + facial area."""
     from deepface import DeepFace
 
@@ -174,10 +180,10 @@ def _represent(img_array: np.ndarray, strict_only: bool = True) -> Tuple[Optiona
                             continue
                         best = _pick_largest_face(reps)
                         area = best.get("facial_area")
-                        if strict and not _face_big_enough(area, img_array.shape):
+                        if strict and not _face_big_enough(area, img_array.shape, min_face_ratio):
                             last_reason = "face_too_small"
                             continue
-                        if strict and not _is_sharp_enough(img_array, area):
+                        if strict and not _is_sharp_enough(img_array, area, min_blur):
                             last_reason = "too_blurry"
                             continue
                         emb = np.array(best["embedding"], dtype=np.float64)
@@ -298,6 +304,36 @@ def _best_distance(probe: np.ndarray, stored: List[np.ndarray]) -> float:
     return min(_cosine_dist(probe, e) for e in stored)
 
 
+def _probe_from_image(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    """Extract face embedding for attendance — strict first, then slightly relaxed."""
+    emb, _, reason = _represent(img_array, strict_only=True)
+    if emb is not None:
+        return emb, None
+    emb, _, reason2 = _represent(
+        img_array,
+        strict_only=True,
+        min_face_ratio=0.03,
+        min_blur=MIN_BLUR_VARIANCE_ATTENDANCE,
+    )
+    if emb is not None:
+        return emb, None
+    emb, _, _ = _represent(img_array, strict_only=False, min_face_ratio=0.03, min_blur=MIN_BLUR_VARIANCE_ATTENDANCE)
+    if emb is not None:
+        return emb, None
+    return None, reason or reason2 or "no_face"
+
+
+def _probe_from_bytes(raw: bytes) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    try:
+        img = np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
+        if img.size == 0 or min(img.shape[:2]) < 60:
+            return None, "face_too_small"
+        return _probe_from_image(img)
+    except Exception:
+        logger.exception("_probe_from_bytes")
+        return None, "error"
+
+
 def find_duplicate(probe: np.ndarray, stored_encodings: list, exclude_emp_id: Optional[int] = None) -> Optional[int]:
     """Return employee id if this face already belongs to someone else."""
     for emp_id, enc_bytes in stored_encodings:
@@ -314,46 +350,69 @@ def find_duplicate(probe: np.ndarray, stored_encodings: list, exclude_emp_id: Op
     return None
 
 
+def _score_match(probes: List[np.ndarray], stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
+    scores, outdated = [], 0
+    for emp_id, enc_bytes in stored_encodings:
+        try:
+            embs = _unpack(enc_bytes)
+        except Exception:
+            continue
+        if not embs:
+            outdated += 1
+            continue
+        dist = min(_best_distance(p, embs) for p in probes)
+        scores.append((emp_id, dist))
+
+    if not scores:
+        return None, 0.0, "outdated_profile" if outdated else "no_match"
+
+    scores.sort(key=lambda x: x[1])
+    best_id, best_dist = scores[0]
+    second_dist = scores[1][1] if len(scores) > 1 else 999.0
+
+    if best_dist > FACE_MATCH_THRESHOLD:
+        logger.info("No match: best_dist=%.3f threshold=%.3f", best_dist, FACE_MATCH_THRESHOLD)
+        return None, 0.0, "no_match"
+
+    conf = _confidence(best_dist)
+    if conf < MIN_MATCH_CONFIDENCE:
+        return None, 0.0, "no_match"
+
+    if len(scores) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
+        if (second_dist - best_dist) < MATCH_MARGIN:
+            logger.info("Rejected ambiguous match: best=%.3f second=%.3f", best_dist, second_dist)
+            return None, 0.0, "ambiguous"
+
+    return best_id, conf, None
+
+
 def match_face(base64_image: str, stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
     try:
         img = decode_base64_image(base64_image)
-        probe, _, reason = _represent(img, strict_only=True)
+        probe, reason = _probe_from_image(img)
         if probe is None:
             return None, 0.0, reason or "no_face"
-
-        scores, outdated = [], 0
-        for emp_id, enc_bytes in stored_encodings:
-            try:
-                embs = _unpack(enc_bytes)
-            except Exception:
-                continue
-            if not embs:
-                outdated += 1
-                continue
-            scores.append((emp_id, _best_distance(probe, embs)))
-
-        if not scores:
-            return None, 0.0, "outdated_profile" if outdated else "no_match"
-
-        scores.sort(key=lambda x: x[1])
-        best_id, best_dist = scores[0]
-        second_dist = scores[1][1] if len(scores) > 1 else 999.0
-
-        if best_dist > FACE_MATCH_THRESHOLD:
-            return None, 0.0, "no_match"
-
-        conf = _confidence(best_dist)
-        if conf < MIN_MATCH_CONFIDENCE:
-            return None, 0.0, "no_match"
-
-        if len(scores) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
-            if (second_dist - best_dist) < MATCH_MARGIN:
-                logger.info("Rejected ambiguous match: best=%.3f second=%.3f", best_dist, second_dist)
-                return None, 0.0, "ambiguous"
-
-        return best_id, conf, None
+        return _score_match([probe], stored_encodings)
     except Exception:
         logger.exception("match_face")
+        return None, 0.0, "error"
+
+
+def match_face_bytes(raw_images: List[bytes], stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
+    try:
+        probes = []
+        last_reason = "no_face"
+        for raw in raw_images:
+            probe, reason = _probe_from_bytes(raw)
+            if probe is not None:
+                probes.append(probe)
+            elif reason:
+                last_reason = reason
+        if not probes:
+            return None, 0.0, last_reason
+        return _score_match(probes, stored_encodings)
+    except Exception:
+        logger.exception("match_face_bytes")
         return None, 0.0, "error"
 
 
