@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import api, { parseApiError } from '../api'
+import { formatTime, formatDate, formatDateTime } from '../utils/datetime'
 
 export default function AdminDashboard() {
   const [stats, setStats]         = useState(null)
@@ -177,7 +178,7 @@ export default function AdminDashboard() {
                 <td>{emp.name}</td>
                 <td>{emp.employee_id}</td>
                 <td>{emp.department || '-'}</td>
-                <td>{emp.registered_at ? new Date(emp.registered_at).toLocaleDateString('en-GB') : '-'}</td>
+                <td>{emp.registered_at ? formatDate(emp.registered_at) : '-'}</td>
                 <td><span className={`badge ${emp.is_active ? 'badge-green' : 'badge-red'}`}>{emp.is_active ? 'Active' : 'Inactive'}</span></td>
                 <td onClick={e => e.stopPropagation()}>
                   <button className="btn-primary btn-sm" style={{marginRight:6}} onClick={() => openEdit(emp)}>Edit</button>
@@ -192,15 +193,15 @@ export default function AdminDashboard() {
         </table>
       </div>
 
-      <h2 className="section-title">Today&apos;s Attendance</h2>
+      <h2 className="section-title">Today&apos;s Attendance <span style={{fontSize:12, color:'#64748b', fontWeight:400}}>(IST)</span></h2>
 
       <div className="mobile-only">
         {logs.map((log, i) => (
           <div key={i} className="att-card">
             <div className="att-card-name">{log.employee_name}</div>
             <div className="att-card-meta">
-              In: {log.check_in ? new Date(log.check_in).toLocaleTimeString('en-GB') : '-'}
-              {log.check_out ? ` · Out: ${new Date(log.check_out).toLocaleTimeString('en-GB')}` : ''}
+              In: {log.check_in ? formatTime(log.check_in) : '-'}
+              {log.check_out ? ` · Out: ${formatTime(log.check_out)}` : ''}
               {log.duration ? ` · ${log.duration}` : ''}
             </div>
             <span className={`badge ${log.check_out ? 'badge-gray' : 'badge-green'}`}>
@@ -223,8 +224,8 @@ export default function AdminDashboard() {
                 <td>{log.employee_name}</td>
                 <td>{log.employee_id}</td>
                 <td>{log.department || '-'}</td>
-                <td>{log.check_in  ? new Date(log.check_in ).toLocaleTimeString('en-GB') : '-'}</td>
-                <td>{log.check_out ? new Date(log.check_out).toLocaleTimeString('en-GB') : '-'}</td>
+                <td>{log.check_in  ? formatTime(log.check_in)  : '-'}</td>
+                <td>{log.check_out ? formatTime(log.check_out) : '-'}</td>
                 <td>{log.duration || '-'}</td>
                 <td><span className={`badge ${log.check_out ? 'badge-gray' : 'badge-green'}`}>{log.check_out ? 'Completed' : 'In Office'}</span></td>
               </tr>
@@ -240,7 +241,7 @@ export default function AdminDashboard() {
             <div className="modal-title">{selected.name}</div>
             {[['Employee ID', selected.employee_id], ['Department', selected.department || 'N/A'],
               ['Status', selected.is_active ? 'Active' : 'Inactive'],
-              ['Registered', selected.registered_at ? new Date(selected.registered_at).toLocaleString('en-GB') : '-'],
+              ['Registered', selected.registered_at ? formatDateTime(selected.registered_at) : '-'],
             ].map(([label, val]) => (
               <div key={label} className="detail-row">
                 <span className="detail-label">{label}</span><span>{val}</span>

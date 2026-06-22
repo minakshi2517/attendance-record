@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     ALGORITHM: str    = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     CHECKOUT_LOCKOUT_MINUTES: int    = 15
+    TIMEZONE: str = "Asia/Kolkata"
 
     class Config:
         env_file = ".env"

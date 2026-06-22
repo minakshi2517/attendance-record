@@ -63,6 +63,7 @@ async def register_employee(
     department: str = Form(""),
     face_image: UploadFile = File(...),
     face_image_2: Optional[UploadFile] = File(None),
+    face_image_3: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     admin=Depends(get_current_admin),
 ):
@@ -89,6 +90,12 @@ async def register_employee(
         if raw2 and len(raw2) <= 600_000:
             images.append(
                 f"data:{face_image_2.content_type or 'image/jpeg'};base64,{base64.b64encode(raw2).decode('ascii')}"
+            )
+    if face_image_3 is not None:
+        raw3 = await face_image_3.read()
+        if raw3 and len(raw3) <= 600_000:
+            images.append(
+                f"data:{face_image_3.content_type or 'image/jpeg'};base64,{base64.b64encode(raw3).decode('ascii')}"
             )
     face_bytes = _build_encoding(images, db)
 

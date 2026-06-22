@@ -8,6 +8,7 @@ from app import models
 from app.utils.auth_utils import get_current_admin
 from app.utils.face_utils import match_face, match_face_bytes
 from app.config import settings
+from app.utils.time_utils import today_start_utc, now_utc, checkout_available_at, to_iso, local_date_to_utc_start, local_date_to_utc_end
 
 router = APIRouter()
 
@@ -45,17 +46,31 @@ def _identify(payload: FaceRequest, db: Session):
     return emp, confidence
 
 
-async def _identify_upload(face_image: UploadFile, db: Session, extra: Optional[UploadFile] = None):
+async def _read_face_uploads(primary: UploadFile, *extras: Optional[UploadFile]) -> List[bytes]:
+    raws = [await primary.read()]
+    for f in extras:
+        if f is not None:
+            chunk = await f.read()
+            if chunk:
+                raws.append(chunk)
+    return [r for r in raws if r]
+
+
+def _checkout_meta(check_in: datetime) -> dict:
+    available = checkout_available_at(check_in)
+    return {
+        "checkout_lockout_minutes": settings.CHECKOUT_LOCKOUT_MINUTES,
+        "checkout_available_at": to_iso(available),
+        "timezone": settings.TIMEZONE,
+    }
+
+
+async def _identify_upload(face_image: UploadFile, db: Session, *extras: Optional[UploadFile]):
     encodings = load_encodings(db)
     if not encodings:
         raise HTTPException(404, "No registered employees found. Ask admin to register team members first.")
 
-    raws = [await face_image.read()]
-    if extra is not None:
-        r2 = await extra.read()
-        if r2:
-            raws.append(r2)
-    raws = [r for r in raws if r]
+    raws = await _read_face_uploads(face_image, *extras)
     if not raws:
         raise HTTPException(422, "Face photo is required.")
 
@@ -70,11 +85,12 @@ async def _identify_upload(face_image: UploadFile, db: Session, extra: Optional[
 async def check_in(
     face_image: UploadFile = File(...),
     face_image_2: Optional[UploadFile] = File(None),
+    face_image_3: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    emp, confidence = await _identify_upload(face_image, db, face_image_2)
+    emp, confidence = await _identify_upload(face_image, db, face_image_2, face_image_3)
 
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = today_start_utc()
     existing = db.query(models.AttendanceLog).filter(
         models.AttendanceLog.employee_id == emp.id,
         models.AttendanceLog.check_in >= today,
@@ -85,29 +101,32 @@ async def check_in(
         return {
             "status": "already_checked_in",
             "message": f"{emp.name} is already checked in.",
-            "check_in_time": existing.check_in.isoformat(),
+            "check_in_time": to_iso(existing.check_in),
+            **_checkout_meta(existing.check_in),
         }
 
-    now = datetime.now(timezone.utc)
+    now = now_utc()
     log = models.AttendanceLog(employee_id=emp.id, check_in=now, confidence=confidence)
     db.add(log); db.commit(); db.refresh(log)
     return {
         "status": "checked_in",
         "message": f"Welcome, {emp.name}!",
         "employee": {"name": emp.name, "employee_id": emp.employee_id, "department": emp.department},
-        "check_in_time": now.isoformat(),
+        "check_in_time": to_iso(now),
         "confidence": confidence,
+        **_checkout_meta(now),
     }
 
 @router.post("/checkout")
 async def check_out(
     face_image: UploadFile = File(...),
     face_image_2: Optional[UploadFile] = File(None),
+    face_image_3: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    emp, confidence = await _identify_upload(face_image, db, face_image_2)
+    emp, confidence = await _identify_upload(face_image, db, face_image_2, face_image_3)
 
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = today_start_utc()
     log   = db.query(models.AttendanceLog).filter(
         models.AttendanceLog.employee_id == emp.id,
         models.AttendanceLog.check_in >= today,
@@ -117,8 +136,8 @@ async def check_out(
     if not log:
         raise HTTPException(400, "Please check in first.")
 
-    now           = datetime.now(timezone.utc)
-    lockout_until = log.check_in + timedelta(minutes=settings.CHECKOUT_LOCKOUT_MINUTES)
+    now           = now_utc()
+    lockout_until = checkout_available_at(log.check_in)
     if now < lockout_until:
         remaining = int((lockout_until - now).total_seconds())
         mins      = remaining // 60
@@ -131,15 +150,16 @@ async def check_out(
     return {
         "status": "checked_out",
         "message": f"Goodbye, {emp.name}! You worked {hours}h {mins}m today.",
-        "check_in_time": log.check_in.isoformat(),
-        "check_out_time": now.isoformat(),
+        "check_in_time": to_iso(log.check_in),
+        "check_out_time": to_iso(now),
         "duration": f"{hours}h {mins}m",
         "confidence": confidence,
+        "timezone": settings.TIMEZONE,
     }
 
 @router.get("/today")
 def today_attendance(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = today_start_utc()
     logs  = db.query(models.AttendanceLog, models.Employee)\
               .join(models.Employee)\
               .filter(models.AttendanceLog.check_in >= today)\
@@ -153,8 +173,8 @@ def today_attendance(db: Session = Depends(get_db), admin=Depends(get_current_ad
         result.append({
             "employee_name": emp.name, "employee_id": emp.employee_id,
             "department": emp.department,
-            "check_in": log.check_in.isoformat() if log.check_in else None,
-            "check_out": log.check_out.isoformat() if log.check_out else None,
+            "check_in": to_iso(log.check_in) if log.check_in else None,
+            "check_out": to_iso(log.check_out) if log.check_out else None,
             "duration": dur,
             "status": "Completed" if log.check_out else "In Office",
             "confidence": log.confidence,
@@ -173,10 +193,9 @@ def history(
     if employee_id:
         q = q.filter(models.Employee.employee_id == employee_id)
     if date_from:
-        q = q.filter(models.AttendanceLog.check_in >= datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc))
+        q = q.filter(models.AttendanceLog.check_in >= local_date_to_utc_start(date_from))
     if date_to:
-        dt = datetime.fromisoformat(date_to).replace(tzinfo=timezone.utc, hour=23, minute=59, second=59)
-        q  = q.filter(models.AttendanceLog.check_in <= dt)
+        q = q.filter(models.AttendanceLog.check_in <= local_date_to_utc_end(date_to))
     logs = q.order_by(models.AttendanceLog.check_in.desc()).limit(500).all()
     result = []
     for log, emp in logs:
@@ -187,8 +206,8 @@ def history(
         result.append({
             "employee_name": emp.name, "employee_id": emp.employee_id,
             "department": emp.department,
-            "check_in":  log.check_in.isoformat()  if log.check_in  else None,
-            "check_out": log.check_out.isoformat() if log.check_out else None,
+            "check_in":  to_iso(log.check_in)  if log.check_in  else None,
+            "check_out": to_iso(log.check_out) if log.check_out else None,
             "duration": dur,
             "status": "Completed" if log.check_out else "In Office",
         })
@@ -196,7 +215,7 @@ def history(
 
 @router.get("/stats")
 def stats(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    today        = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today        = today_start_utc()
     total        = db.query(models.Employee).filter(models.Employee.is_active == True).count()
     checked_in   = db.query(models.AttendanceLog).filter(models.AttendanceLog.check_in >= today).count()
     currently_in = db.query(models.AttendanceLog).filter(

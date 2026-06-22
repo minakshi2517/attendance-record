@@ -17,3 +17,4 @@ opencv-python-headless==4.10.0.84
 deepface==0.0.100
 tensorflow-cpu==2.21.0
 tf-keras==2.21.0
+tzdata==2025.1

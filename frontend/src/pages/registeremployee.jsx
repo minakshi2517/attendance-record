@@ -22,15 +22,18 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Scan 1 of 2 — look straight at the camera...')
+    setStatus('Scan 1 of 3 — look straight at the camera...')
     try {
       const blob1 = await captureBlob()
       if (!blob1) {
         setMsg({ ok:false, text:'Could not capture face. Please try again.' }); return
       }
-      setStatus('Scan 2 of 2 — hold still...')
-      await new Promise(r => setTimeout(r, 800))
+      setStatus('Scan 2 of 3 — hold still...')
+      await new Promise(r => setTimeout(r, 700))
       const blob2 = await captureBlob()
+      setStatus('Scan 3 of 3 — hold still...')
+      await new Promise(r => setTimeout(r, 700))
+      const blob3 = await captureBlob()
 
       setStatus('Saving face geometry — please wait 30-90 sec, do not close...')
       const body = new FormData()
@@ -39,6 +42,7 @@ export default function RegisterEmployee() {
       if (form.department.trim()) body.append('department', form.department.trim())
       body.append('face_image', blob1, 'face1.jpg')
       if (blob2) body.append('face_image_2', blob2, 'face2.jpg')
+      if (blob3) body.append('face_image_3', blob3, 'face3.jpg')
 
       const { data } = await api.post('/api/employees/register', body)
       setMsg({ ok:true, text:`${data.name} registered successfully!` })
@@ -77,7 +81,8 @@ export default function RegisterEmployee() {
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill details, face the camera, tap Register. Two quick scans build a stronger face profile.
+          Fill details, face the camera, tap Register. Three quick scans save facial geometry only —
+          lighting, clothes, hair and background do not matter.
         </p>
 
         <label className="field-label">Full Name *</label>

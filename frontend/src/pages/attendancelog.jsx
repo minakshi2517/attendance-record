@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import api from '../api'
+import { formatDateTime } from '../utils/datetime'
 
 const s = {
   page:    { maxWidth:1000, margin:'40px auto', padding:24 },
@@ -52,8 +53,8 @@ export default function AttendanceLogs() {
               <td style={s.td}>{log.employee_name}</td>
               <td style={s.td}>{log.employee_id}</td>
               <td style={s.td}>{log.department || '-'}</td>
-              <td style={s.td}>{log.check_in  ? new Date(log.check_in ).toLocaleString('en-GB') : '-'}</td>
-              <td style={s.td}>{log.check_out ? new Date(log.check_out).toLocaleString('en-GB') : '-'}</td>
+              <td style={s.td}>{log.check_in  ? formatDateTime(log.check_in)  : '-'}</td>
+              <td style={s.td}>{log.check_out ? formatDateTime(log.check_out) : '-'}</td>
               <td style={s.td}>{log.duration || '-'}</td>
               <td style={s.td}>
                 <span style={{padding:'3px 8px', borderRadius:20, fontSize:11, fontWeight:600,

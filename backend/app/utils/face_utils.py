@@ -24,9 +24,9 @@ PACK_VERSION = 3
 DETECTORS = ["retinaface", "opencv", "ssd"]
 
 # ArcFace cosine distance: lower = more similar. DeepFace verify default ~0.68.
-FACE_MATCH_THRESHOLD = 0.54
-MATCH_MARGIN = 0.08
-MIN_MATCH_CONFIDENCE = 52.0
+FACE_MATCH_THRESHOLD = 0.56
+MATCH_MARGIN = 0.07
+MIN_MATCH_CONFIDENCE = 50.0
 MIN_FACE_FRAME_RATIO = 0.035
 MIN_BLUR_VARIANCE = 20.0
 MIN_BLUR_VARIANCE_ATTENDANCE = 12.0
@@ -100,17 +100,53 @@ def _normalize_lighting(img_array: np.ndarray) -> np.ndarray:
         return img_array
 
 
-def _face_crop(img_array: np.ndarray, area: dict) -> np.ndarray:
+def _face_crop(img_array: np.ndarray, area: dict, pad: float = 0.30) -> np.ndarray:
     if not area:
         return img_array
     h, w = img_array.shape[:2]
-    x = max(0, int(area.get("x", 0)))
-    y = max(0, int(area.get("y", 0)))
-    fw = min(w - x, int(area.get("w", w)))
-    fh = min(h - y, int(area.get("h", h)))
+    x = int(area.get("x", 0))
+    y = int(area.get("y", 0))
+    fw = int(area.get("w", 0))
+    fh = int(area.get("h", 0))
     if fw <= 0 or fh <= 0:
         return img_array
-    return img_array[y:y + fh, x:x + fw]
+    px, py = int(fw * pad), int(fh * pad)
+    x1, y1 = max(0, x - px), max(0, y - py)
+    x2, y2 = min(w, x + fw + px), min(h, y + fh + py)
+    if x2 <= x1 or y2 <= y1:
+        return img_array
+    return img_array[y1:y2, x1:x2].copy()
+
+
+def _blend_embeddings(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return _normalize((_normalize(a) + _normalize(b)) * 0.5)
+
+
+def _represent_crop_only(crop: np.ndarray) -> Optional[np.ndarray]:
+    """Second pass on face crop only — ignores background, clothes, hair outside crop."""
+    from deepface import DeepFace
+
+    crop = _normalize_lighting(crop)
+    if crop.size == 0 or min(crop.shape[:2]) < 48:
+        return None
+    for backend in ["opencv", "ssd", "retinaface"]:
+        try:
+            with _quiet():
+                reps = DeepFace.represent(
+                    img_path=crop,
+                    model_name=MODEL_NAME,
+                    detector_backend=backend,
+                    enforce_detection=False,
+                    align=True,
+                )
+            if not reps:
+                continue
+            emb = np.array(reps[0]["embedding"], dtype=np.float64)
+            if emb.shape[0] == EMBEDDING_DIM:
+                return emb
+        except Exception:
+            continue
+    return None
 
 
 def _is_sharp_enough(img_array: np.ndarray, area: dict, min_variance: float = MIN_BLUR_VARIANCE) -> bool:
@@ -189,6 +225,11 @@ def _represent(
                         emb = np.array(best["embedding"], dtype=np.float64)
                         if emb.shape[0] != EMBEDDING_DIM:
                             continue
+                        if area:
+                            crop = _face_crop(img_array, area)
+                            crop_emb = _represent_crop_only(crop)
+                            if crop_emb is not None:
+                                emb = _blend_embeddings(emb, crop_emb)
                         return emb, area, None
                     except Exception as e:
                         logger.debug("represent %s strict=%s: %s", backend, strict, e)
