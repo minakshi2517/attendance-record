@@ -74,6 +74,14 @@ export default function CheckInOut() {
     }
   }
 
+  const handleCheckoutError = (msg) => {
+    const lower = msg.toLowerCase()
+    if (lower.includes('check in') || lower.includes('no check-in')) {
+      clearCheckoutLock()
+      refreshCheckoutTimer()
+    }
+  }
+
   const submit = async (mode) => {
     if (!ready) { setResult({ ok:false, msg:'Camera is starting, please wait...' }); return }
     if (mode === 'checkout' && !checkoutReady) {
@@ -96,11 +104,11 @@ export default function CheckInOut() {
         clearCheckoutLock()
         refreshCheckoutTimer()
       }
-
       setResult({ ok:true, data })
       setStatus('')
     } catch (err) {
       const msg = parseApiError(err)
+      handleCheckoutError(msg)
       if (msg.toLowerCase().includes('too early to check out')) {
         const lock = loadCheckoutLock()
         if (lock?.checkout_available_at) refreshCheckoutTimer()
@@ -132,6 +140,11 @@ export default function CheckInOut() {
       {!checkoutReady && checkoutWait && (
         <div className="alert alert-error" style={{ marginBottom:12, textAlign:'center' }}>
           Checkout available in <strong>{checkoutWait}</strong>
+          {loadCheckoutLock()?.employee_name ? (
+            <div style={{ fontSize:12, marginTop:6, color:'#94a3b8' }}>
+              Checked in as {loadCheckoutLock().employee_name} — if checkout fails, tap Check In again.
+            </div>
+          ) : null}
         </div>
       )}
 

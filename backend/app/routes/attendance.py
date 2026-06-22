@@ -33,6 +33,20 @@ def load_encodings(db):
     ).all()
     return [(e.id, e.face_encoding) for e in emps]
 
+
+def _open_sessions_today(db):
+    """Employees currently checked in today (IST day boundary)."""
+    today = today_start_utc()
+    return (
+        db.query(models.AttendanceLog, models.Employee)
+        .join(models.Employee)
+        .filter(
+            models.AttendanceLog.check_in >= today,
+            models.AttendanceLog.check_out.is_(None),
+        )
+        .all()
+    )
+
 def _identify(payload: FaceRequest, db: Session):
     encodings = load_encodings(db)
     if not encodings:
@@ -101,6 +115,7 @@ async def check_in(
         return {
             "status": "already_checked_in",
             "message": f"{emp.name} is already checked in.",
+            "employee": {"name": emp.name, "employee_id": emp.employee_id, "department": emp.department},
             "check_in_time": to_iso(existing.check_in),
             **_checkout_meta(existing.check_in),
         }
@@ -124,17 +139,30 @@ async def check_out(
     face_image_3: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    emp, confidence = await _identify_upload(face_image, db, face_image_2, face_image_3)
+    open_rows = _open_sessions_today(db)
+    if not open_rows:
+        raise HTTPException(
+            400,
+            "No check-in found on server for today. Please tap Check In again (old session may have expired after server update).",
+        )
 
-    today = today_start_utc()
-    log   = db.query(models.AttendanceLog).filter(
-        models.AttendanceLog.employee_id == emp.id,
-        models.AttendanceLog.check_in >= today,
-        models.AttendanceLog.check_out == None,
-    ).first()
+    open_ids = {emp.id for _, emp in open_rows}
+    encodings = [(eid, enc) for eid, enc in load_encodings(db) if eid in open_ids]
+    if not encodings:
+        raise HTTPException(400, "Checked-in employees have no face profile. Ask admin to re-register.")
 
-    if not log:
-        raise HTTPException(400, "Please check in first.")
+    raws = await _read_face_uploads(face_image, face_image_2, face_image_3)
+    emp_id, confidence, reason = match_face_bytes(raws, encodings)
+    if emp_id is None:
+        names = ", ".join(emp.name for _, emp in open_rows)
+        raise HTTPException(
+            403,
+            MATCH_ERRORS.get(reason or "no_match", MATCH_ERRORS["no_match"])
+            + f" Currently checked in: {names}.",
+        )
+
+    log = next(lg for lg, em in open_rows if em.id == emp_id)
+    emp = next(em for lg, em in open_rows if em.id == emp_id)
 
     now           = now_utc()
     lockout_until = checkout_available_at(log.check_in)
@@ -150,6 +178,7 @@ async def check_out(
     return {
         "status": "checked_out",
         "message": f"Goodbye, {emp.name}! You worked {hours}h {mins}m today.",
+        "employee": {"name": emp.name, "employee_id": emp.employee_id, "department": emp.department},
         "check_in_time": to_iso(log.check_in),
         "check_out_time": to_iso(now),
         "duration": f"{hours}h {mins}m",
