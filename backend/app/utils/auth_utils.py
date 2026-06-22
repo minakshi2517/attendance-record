@@ -25,7 +25,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 def get_current_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    err = HTTPException(status_code=401, detail="Invalid credentials")
+    err = HTTPException(status_code=401, detail="Session expired. Please log in again.")
     try:
         payload  = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username = payload.get("sub")

@@ -1,14 +1,22 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import useAuthStore from '../store/authstore'
 import api from '../api'
 
 export default function AdminLogin() {
-  const [form, setForm] = useState({ username:'', password:'' })
+  const [form, setForm] = useState({ username:'admin', password:'' })
   const [err,  setErr]  = useState('')
   const [loading, setLoading] = useState(false)
-  const { login } = useAuthStore()
+  const { login, logout } = useAuthStore()
   const nav = useNavigate()
+  const [params] = useSearchParams()
+
+  useEffect(() => {
+    logout()
+    if (params.get('expired') === '1') {
+      setErr('Your session expired (server was updated). Please log in again.')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = async () => {
     setErr(''); setLoading(true)
@@ -19,8 +27,8 @@ export default function AdminLogin() {
       })
       login(data.access_token, data.admin_name)
       nav('/admin/dashboard')
-    } catch {
-      setErr('Incorrect username or password.')
+    } catch (e) {
+      setErr(e.response?.data?.detail || 'Incorrect username or password.')
     } finally { setLoading(false) }
   }
 
@@ -39,6 +47,9 @@ export default function AdminLogin() {
           {loading ? 'Signing in...' : 'Login'}
         </button>
         {err && <div className="alert alert-error" style={{marginTop:12}}>{err}</div>}
+        <p style={{color:'#64748b', fontSize:12, marginTop:12, textAlign:'center'}}>
+          Default: admin / admin123
+        </p>
       </div>
     </div>
   )
