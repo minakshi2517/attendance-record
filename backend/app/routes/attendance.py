@@ -20,7 +20,7 @@ MATCH_ERRORS = {
     "multiple_faces":   "Only one person should be in the frame.",
     "face_too_small":   "Move closer to the camera.",
     "too_blurry":       "Hold still — image is too blurry.",
-    "no_match":         "Face not recognized. Look straight at the camera, move closer, or ask admin to re-register you.",
+    "no_match":         "Face not recognized. Please delete old profile and ask admin to re-register you with 3 face scans.",
     "outdated_profile": "Your face profile is outdated. Ask admin to re-register you.",
     "ambiguous":        "Could not identify you clearly. Please try again.",
     "error":            "Face scan failed. Please try again.",

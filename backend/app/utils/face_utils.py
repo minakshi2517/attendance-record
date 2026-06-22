@@ -23,13 +23,13 @@ PACK_VERSION = 3
 
 DETECTORS = ["retinaface", "opencv", "ssd"]
 
-# ArcFace cosine distance: lower = more similar. DeepFace verify default ~0.68.
-FACE_MATCH_THRESHOLD = 0.56
-MATCH_MARGIN = 0.07
-MIN_MATCH_CONFIDENCE = 50.0
-MIN_FACE_FRAME_RATIO = 0.035
-MIN_BLUR_VARIANCE = 20.0
-MIN_BLUR_VARIANCE_ATTENDANCE = 12.0
+# DeepFace ArcFace default verify threshold is ~0.68 (cosine distance).
+FACE_MATCH_THRESHOLD = 0.65
+DUPLICATE_THRESHOLD = 0.52
+MATCH_MARGIN = 0.05
+MIN_FACE_FRAME_RATIO = 0.03
+MIN_BLUR_VARIANCE = 15.0
+MIN_BLUR_VARIANCE_ATTENDANCE = 10.0
 
 
 @contextlib.contextmanager
@@ -57,17 +57,22 @@ def image_bytes_to_base64(raw: bytes, content_type: str = "image/jpeg") -> str:
 
 
 def extract_embedding_from_bytes(raw: bytes) -> Tuple[Optional[np.ndarray], Optional[str]]:
-    try:
-        img = np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
-        if img.size == 0 or min(img.shape[:2]) < 80:
-            return None, "Move closer to the camera."
-        emb, _, reason = _represent(img, strict_only=True)
-        if emb is None:
-            return None, _reason_message(reason)
-        return emb, None
-    except Exception as e:
-        logger.exception("extract_embedding_from_bytes")
-        return None, f"Face scan failed: {e}"
+    return _probe_from_bytes(raw)
+
+
+def build_profile_from_bytes(raw_images: List[bytes]) -> Tuple[Optional[bytes], Optional[str]]:
+    """Same face pipeline as check-in — register and match stay consistent."""
+    embeddings = []
+    last_err = None
+    for raw in raw_images:
+        emb, reason = _probe_from_bytes(raw)
+        if emb is not None:
+            embeddings.append(emb)
+        else:
+            last_err = _reason_message(reason)
+    if not embeddings:
+        return None, last_err or "No valid face found. Please try again."
+    return _pack_embeddings(embeddings), None
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -300,19 +305,14 @@ def _reason_message(reason: Optional[str]) -> str:
 def extract_embedding(base64_image: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
     try:
         img = decode_base64_image(base64_image)
-        if img.size == 0 or min(img.shape[:2]) < 80:
-            return None, "Move closer to the camera."
-        emb, _, reason = _represent(img, strict_only=True)
-        if emb is None:
-            return None, _reason_message(reason)
-        return emb, None
+        return _probe_from_image(img)
     except Exception as e:
         logger.exception("extract_embedding")
         return None, f"Face scan failed: {e}"
 
 
 def build_profile(images: List[str]) -> Tuple[Optional[bytes], Optional[str]]:
-    """Build stored face profile from 1-3 enrollment photos."""
+    """Build stored face profile from enrollment photos (same pipeline as check-in)."""
     embeddings = []
     last_err = None
     for img in images:
@@ -345,6 +345,22 @@ def _best_distance(probe: np.ndarray, stored: List[np.ndarray]) -> float:
     return min(_cosine_dist(probe, e) for e in stored)
 
 
+def find_duplicate(probe: np.ndarray, stored_encodings: list, exclude_emp_id: Optional[int] = None) -> Optional[int]:
+    """Return employee id if this face already belongs to someone else."""
+    for emp_id, enc_bytes in stored_encodings:
+        if exclude_emp_id is not None and emp_id == exclude_emp_id:
+            continue
+        try:
+            embs = _unpack(enc_bytes)
+        except Exception:
+            continue
+        if not embs:
+            continue
+        if _best_distance(probe, embs) <= DUPLICATE_THRESHOLD:
+            return emp_id
+    return None
+
+
 def _probe_from_image(img_array: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[str]]:
     """Extract face embedding for attendance — strict first, then slightly relaxed."""
     emb, _, reason = _represent(img_array, strict_only=True)
@@ -375,22 +391,6 @@ def _probe_from_bytes(raw: bytes) -> Tuple[Optional[np.ndarray], Optional[str]]:
         return None, "error"
 
 
-def find_duplicate(probe: np.ndarray, stored_encodings: list, exclude_emp_id: Optional[int] = None) -> Optional[int]:
-    """Return employee id if this face already belongs to someone else."""
-    for emp_id, enc_bytes in stored_encodings:
-        if exclude_emp_id is not None and emp_id == exclude_emp_id:
-            continue
-        try:
-            embs = _unpack(enc_bytes)
-        except Exception:
-            continue
-        if not embs:
-            continue
-        if _best_distance(probe, embs) <= FACE_MATCH_THRESHOLD:
-            return emp_id
-    return None
-
-
 def _score_match(probes: List[np.ndarray], stored_encodings: list) -> Tuple[Optional[int], float, Optional[str]]:
     scores, outdated = [], 0
     for emp_id, enc_bytes in stored_encodings:
@@ -412,13 +412,12 @@ def _score_match(probes: List[np.ndarray], stored_encodings: list) -> Tuple[Opti
     second_dist = scores[1][1] if len(scores) > 1 else 999.0
 
     if best_dist > FACE_MATCH_THRESHOLD:
-        logger.info("No match: best_dist=%.3f threshold=%.3f", best_dist, FACE_MATCH_THRESHOLD)
+        logger.info("No match: best_dist=%.3f threshold=%.3f employees=%d", best_dist, FACE_MATCH_THRESHOLD, len(scores))
         return None, 0.0, "no_match"
 
     conf = _confidence(best_dist)
-    if conf < MIN_MATCH_CONFIDENCE:
-        return None, 0.0, "no_match"
 
+    # Only block ambiguous matches when 2+ people are close — skip for single employee teams.
     if len(scores) > 1 and second_dist <= FACE_MATCH_THRESHOLD:
         if (second_dist - best_dist) < MATCH_MARGIN:
             logger.info("Rejected ambiguous match: best=%.3f second=%.3f", best_dist, second_dist)

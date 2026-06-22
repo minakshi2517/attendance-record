@@ -6,7 +6,7 @@ from typing import Optional, List
 from app.database import get_db
 from app import models
 from app.utils.auth_utils import get_current_admin
-from app.utils.face_utils import build_profile, find_duplicate, extract_embedding
+from app.utils.face_utils import build_profile_from_bytes, find_duplicate, _probe_from_bytes
 
 router = APIRouter()
 
@@ -37,15 +37,15 @@ def _load_face_encodings(db):
     return [(e.id, e.face_encoding) for e in emps]
 
 
-def _build_encoding(images: List[str], db, exclude_emp_id=None) -> bytes:
+def _build_encoding_from_raws(raws: List[bytes], db, exclude_emp_id=None) -> bytes:
     """Turn enrollment photos into geometry-only face profile, or raise 422."""
-    face_bytes, err = build_profile(images)
+    face_bytes, err = build_profile_from_bytes(raws)
     if face_bytes is None:
         raise HTTPException(422, err or "No face detected in the captured photos. Please try again.")
 
     stored = _load_face_encodings(db)
-    for img in images:
-        emb, _ = extract_embedding(img)
+    for raw in raws:
+        emb, _ = _probe_from_bytes(raw)
         if emb is None:
             continue
         dup_id = find_duplicate(emb, stored, exclude_emp_id=exclude_emp_id)
@@ -83,21 +83,16 @@ async def register_employee(
     if len(raw) > 600_000:
         raise HTTPException(422, "Photo is too large. Move closer to the camera and try again.")
 
-    b64 = f"data:{face_image.content_type or 'image/jpeg'};base64,{base64.b64encode(raw).decode('ascii')}"
-    images = [b64]
+    raws = [raw]
     if face_image_2 is not None:
         raw2 = await face_image_2.read()
         if raw2 and len(raw2) <= 600_000:
-            images.append(
-                f"data:{face_image_2.content_type or 'image/jpeg'};base64,{base64.b64encode(raw2).decode('ascii')}"
-            )
+            raws.append(raw2)
     if face_image_3 is not None:
         raw3 = await face_image_3.read()
         if raw3 and len(raw3) <= 600_000:
-            images.append(
-                f"data:{face_image_3.content_type or 'image/jpeg'};base64,{base64.b64encode(raw3).decode('ascii')}"
-            )
-    face_bytes = _build_encoding(images, db)
+            raws.append(raw3)
+    face_bytes = _build_encoding_from_raws(raws, db)
 
     emp = models.Employee(
         name          = name,
@@ -137,7 +132,11 @@ def update_employee(employee_id: str, payload: EmployeeUpdate, db: Session = Dep
 
     images = _collect_images(payload.face_image, payload.face_images)
     if images:
-        emp.face_encoding = _build_encoding(images, db, exclude_emp_id=emp.id)
+        emp.face_encoding = _build_encoding_from_raws(
+            [base64.b64decode(i.split(",")[1] if "," in i else i) for i in images if i],
+            db,
+            exclude_emp_id=emp.id,
+        )
 
     db.commit(); db.refresh(emp)
     return {
