@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 
-const MAX_WIDTH = 400
-const JPEG_QUALITY = 0.72
+const MAX_WIDTH = 360
+const JPEG_QUALITY = 0.68
 
 export default function useCamera() {
   const videoRef  = useRef(null)
@@ -37,6 +37,12 @@ export default function useCamera() {
     setReady(false)
   }, [])
 
+  const drawFrame = useCallback((ctx, v, w, h) => {
+    ctx.translate(w, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(v, 0, 0, w, h)
+  }, [])
+
   const capture = useCallback(() => {
     const v = videoRef.current
     if (!v || !v.videoWidth) return null
@@ -51,11 +57,30 @@ export default function useCamera() {
     c.width = w
     c.height = h
     const ctx = c.getContext('2d')
-    ctx.translate(w, 0)
-    ctx.scale(-1, 1)
-    ctx.drawImage(v, 0, 0, w, h)
+    drawFrame(ctx, v, w, h)
     return c.toDataURL('image/jpeg', JPEG_QUALITY)
-  }, [])
+  }, [drawFrame])
+
+  const captureBlob = useCallback(() => new Promise((resolve) => {
+    const v = videoRef.current
+    if (!v || !v.videoWidth) {
+      resolve(null)
+      return
+    }
+
+    const srcW = v.videoWidth
+    const srcH = v.videoHeight
+    const scale = Math.min(1, MAX_WIDTH / srcW)
+    const w = Math.round(srcW * scale)
+    const h = Math.round(srcH * scale)
+
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    const ctx = c.getContext('2d')
+    drawFrame(ctx, v, w, h)
+    c.toBlob(blob => resolve(blob), 'image/jpeg', JPEG_QUALITY)
+  }), [drawFrame])
 
   const captureMultiple = useCallback(async (count = 3, gapMs = 700, onStep) => {
     const shots = []
@@ -72,5 +97,5 @@ export default function useCamera() {
 
   useEffect(() => () => stop(), [stop])
 
-  return { videoRef, ready, error, start, stop, capture, captureMultiple }
+  return { videoRef, ready, error, start, stop, capture, captureBlob, captureMultiple }
 }

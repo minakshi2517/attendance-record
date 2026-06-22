@@ -51,6 +51,24 @@ def decode_base64_image(b64: str) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB"))
 
 
+def image_bytes_to_base64(raw: bytes, content_type: str = "image/jpeg") -> str:
+    return f"data:{content_type};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def extract_embedding_from_bytes(raw: bytes) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    try:
+        img = np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
+        if img.size == 0 or min(img.shape[:2]) < 80:
+            return None, "Move closer to the camera."
+        emb, _, reason = _represent(img, strict_only=True)
+        if emb is None:
+            return None, _reason_message(reason)
+        return emb, None
+    except Exception as e:
+        logger.exception("extract_embedding_from_bytes")
+        return None, f"Face scan failed: {e}"
+
+
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v)
     return v / n if n > 0 else v

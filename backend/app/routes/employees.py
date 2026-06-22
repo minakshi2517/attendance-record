@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile
+import base64
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -56,19 +57,38 @@ def _build_encoding(images: List[str], db, exclude_emp_id=None) -> bytes:
 
 
 @router.post("/register")
-def register_employee(payload: EmployeeCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    if db.query(models.Employee).filter(models.Employee.employee_id == payload.employee_id).first():
+async def register_employee(
+    name: str = Form(...),
+    employee_id: str = Form(...),
+    department: str = Form(""),
+    face_image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin),
+):
+    name = name.strip()
+    employee_id = employee_id.strip()
+    department = department.strip() or None
+
+    if not name or not employee_id:
+        raise HTTPException(422, "Name and Employee ID are required.")
+
+    if db.query(models.Employee).filter(models.Employee.employee_id == employee_id).first():
         raise HTTPException(400, "This Employee ID is already registered.")
 
-    images = _collect_images(payload.face_image, payload.face_images)
-    if not images:
-        raise HTTPException(422, "At least one face photo is required.")
+    raw = await face_image.read()
+    if not raw:
+        raise HTTPException(422, "Face photo is required.")
+    if len(raw) > 600_000:
+        raise HTTPException(422, "Photo is too large. Move closer to the camera and try again.")
+
+    b64 = f"data:{face_image.content_type or 'image/jpeg'};base64,{base64.b64encode(raw).decode('ascii')}"
+    images = [b64]
     face_bytes = _build_encoding(images, db)
 
     emp = models.Employee(
-        name          = payload.name,
-        employee_id   = payload.employee_id,
-        department    = payload.department,
+        name          = name,
+        employee_id   = employee_id,
+        department    = department,
         face_encoding = face_bytes,
         registered_by = admin.id,
     )

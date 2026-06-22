@@ -4,7 +4,7 @@ import useCamera from '../hooks/usecamera'
 import api, { parseApiError } from '../api'
 
 export default function RegisterEmployee() {
-  const { videoRef, ready, error, start, captureMultiple } = useCamera()
+  const { videoRef, ready, error, start, captureBlob } = useCamera()
   const [form, setForm]       = useState({ name:'', employee_id:'', department:'' })
   const [loading, setLoading] = useState(false)
   const [status,  setStatus]  = useState('')
@@ -22,22 +22,21 @@ export default function RegisterEmployee() {
     }
 
     setLoading(true); setMsg(null)
-    setStatus('Scan 1 of 2 — look straight at the camera...')
+    setStatus('Capturing face — hold still...')
     try {
-      const face_images = await captureMultiple(2, 900, (step, total) => {
-        setStatus(`Scan ${step} of ${total} — hold still, one person only...`)
-      })
-      if (face_images.length < 1) {
+      const blob = await captureBlob()
+      if (!blob) {
         setMsg({ ok:false, text:'Could not capture face. Please try again.' }); return
       }
 
       setStatus('Saving face geometry — please wait 30-90 sec, do not close...')
-      const { data } = await api.post('/api/employees/register', {
-        name: form.name.trim(),
-        employee_id: form.employee_id.trim(),
-        department: form.department.trim(),
-        face_images,
-      })
+      const body = new FormData()
+      body.append('name', form.name.trim())
+      body.append('employee_id', form.employee_id.trim())
+      if (form.department.trim()) body.append('department', form.department.trim())
+      body.append('face_image', blob, 'face.jpg')
+
+      const { data } = await api.post('/api/employees/register', body)
       setMsg({ ok:true, text:`${data.name} registered successfully!` })
       setTimeout(() => nav('/admin/dashboard'), 1200)
     } catch (err) {
@@ -74,8 +73,8 @@ export default function RegisterEmployee() {
       <div className="register-card">
         <h2 className="page-title" style={{fontSize:20, marginBottom:8}}>Register Employee</h2>
         <p style={{color:'#64748b', fontSize:13, marginBottom:16}}>
-          Fill details, face the camera, tap Register. The system captures 2 quick scans
-          and saves only facial geometry — lighting and clothes do not matter.
+          Fill details, face the camera, tap Register. One photo is enough —
+          the system saves only facial geometry, not the image.
         </p>
 
         <label className="field-label">Full Name *</label>
