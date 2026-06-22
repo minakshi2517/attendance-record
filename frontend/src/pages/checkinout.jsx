@@ -135,11 +135,11 @@ export default function CheckInOut() {
       )}
 
       <h1 className="checkin-title">Face Attendance</h1>
-      <p className="checkin-sub">Look at the camera — lighting, clothes and background do not matter</p>
+      <p className="checkin-sub">Check-in → wait 2 min → check-out. Face geometry only — not photo.</p>
 
       {!checkoutReady && checkoutWait && (
         <div className="alert alert-error" style={{ marginBottom:12, textAlign:'center' }}>
-          Checkout available in <strong>{checkoutWait}</strong>
+          Checkout available in <strong>{checkoutWait}</strong> (2 min after check-in)
           {loadCheckoutLock()?.employee_name ? (
             <div style={{ fontSize:12, marginTop:6, color:'#94a3b8' }}>
               Checked in as {loadCheckoutLock().employee_name} — if checkout fails, tap Check In again.

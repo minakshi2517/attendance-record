@@ -24,12 +24,12 @@ PACK_VERSION = 3
 DETECTORS = ["retinaface", "opencv", "ssd"]
 
 # DeepFace ArcFace default verify threshold is ~0.68 (cosine distance).
-FACE_MATCH_THRESHOLD = 0.65
-DUPLICATE_THRESHOLD = 0.52
-MATCH_MARGIN = 0.05
-MIN_FACE_FRAME_RATIO = 0.03
-MIN_BLUR_VARIANCE = 15.0
-MIN_BLUR_VARIANCE_ATTENDANCE = 10.0
+FACE_MATCH_THRESHOLD = 0.68
+DUPLICATE_THRESHOLD = 0.55
+MATCH_MARGIN = 0.04
+MIN_FACE_FRAME_RATIO = 0.025
+MIN_BLUR_VARIANCE = 12.0
+MIN_BLUR_VARIANCE_ATTENDANCE = 8.0
 
 
 @contextlib.contextmanager
@@ -72,6 +72,8 @@ def build_profile_from_bytes(raw_images: List[bytes]) -> Tuple[Optional[bytes], 
             last_err = _reason_message(reason)
     if not embeddings:
         return None, last_err or "No valid face found. Please try again."
+    if len(raw_images) >= 2 and len(embeddings) < 2:
+        return None, "Only one face scan worked. Hold still, good light, and try again."
     return _pack_embeddings(embeddings), None
 
 
@@ -338,7 +340,11 @@ def encode_face(base64_image: str) -> Tuple[Optional[bytes], Optional[str]]:
 
 
 def _confidence(dist: float) -> float:
-    return round(max(0.0, min(100.0, (1.0 - dist / FACE_MATCH_THRESHOLD) * 100)), 2)
+    """Display score — good same-person matches show ~88-99%."""
+    if dist <= 0:
+        return 99.0
+    score = 99.0 - (dist / FACE_MATCH_THRESHOLD) * 29.0
+    return round(max(72.0, min(99.0, score)), 1)
 
 
 def _best_distance(probe: np.ndarray, stored: List[np.ndarray]) -> float:

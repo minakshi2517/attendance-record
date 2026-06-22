@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 
-const MAX_WIDTH = 420
-const JPEG_QUALITY = 0.70
+const MAX_WIDTH = 480
+const JPEG_QUALITY = 0.72
 
 export default function useCamera() {
   const videoRef  = useRef(null)

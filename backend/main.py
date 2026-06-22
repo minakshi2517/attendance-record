@@ -1,9 +1,13 @@
 import threading
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base
+from app.database import engine, Base, SessionLocal
 from app.routes import auth, employees, attendance
 from app.utils.face_utils import warmup_model
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
@@ -23,10 +27,31 @@ app.include_router(attendance.router,prefix="/api/attendance",tags=["Attendance"
 
 
 @app.on_event("startup")
-def _warmup_in_background():
-    # Load the face model in a background thread so the server can start
-    # serving immediately (the first face request will wait if needed).
+def _startup():
+    _ensure_default_admin()
     threading.Thread(target=warmup_model, daemon=True).start()
+
+
+def _ensure_default_admin():
+    """After HF rebuild the DB is empty — recreate admin automatically."""
+    from app import models
+    from app.utils.auth_utils import hash_password
+
+    db = SessionLocal()
+    try:
+        if db.query(models.Admin).count() == 0:
+            db.add(models.Admin(
+                username   = settings.DEFAULT_ADMIN_USER,
+                email      = settings.DEFAULT_ADMIN_EMAIL,
+                hashed_pwd = hash_password(settings.DEFAULT_ADMIN_PASSWORD),
+            ))
+            db.commit()
+            logger.info("Default admin account created")
+    except Exception as e:
+        logger.warning("Admin bootstrap failed: %s", e)
+        db.rollback()
+    finally:
+        db.close()
 
 
 @app.get("/")
