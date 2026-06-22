@@ -8,7 +8,7 @@ import {
   clearCheckoutLock,
 } from '../utils/datetime'
 
-const SCAN_COUNT = 3
+const SCAN_COUNT = 2
 const SCAN_GAP_MS = 650
 
 export default function CheckInOut() {
@@ -107,7 +107,14 @@ export default function CheckInOut() {
       setResult({ ok:true, data })
       setStatus('')
     } catch (err) {
-      const msg = parseApiError(err)
+      let msg
+      if (err.code === 'ECONNABORTED') {
+        msg = 'Server took too long. Please try again — first face scan is slowest.'
+      } else if (!err.response) {
+        msg = 'Network error. Check your internet and try again.'
+      } else {
+        msg = parseApiError(err, `Server error (${err.response.status}). Please try again.`)
+      }
       handleCheckoutError(msg)
       if (msg.toLowerCase().includes('too early to check out')) {
         const lock = loadCheckoutLock()

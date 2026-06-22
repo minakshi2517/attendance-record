@@ -8,7 +8,7 @@ from app import models
 from app.utils.auth_utils import get_current_admin
 from app.utils.face_utils import match_face, match_face_bytes
 from app.config import settings
-from app.utils.time_utils import today_start_utc, now_utc, checkout_available_at, to_iso, local_date_to_utc_start, local_date_to_utc_end
+from app.utils.time_utils import today_start_utc, now_utc, checkout_available_at, to_iso, ensure_utc, local_date_to_utc_start, local_date_to_utc_end
 
 router = APIRouter()
 
@@ -71,6 +71,7 @@ async def _read_face_uploads(primary: UploadFile, *extras: Optional[UploadFile])
 
 
 def _checkout_meta(check_in: datetime) -> dict:
+    check_in = ensure_utc(check_in)
     available = checkout_available_at(check_in)
     return {
         "checkout_lockout_minutes": settings.CHECKOUT_LOCKOUT_MINUTES,
@@ -117,7 +118,7 @@ async def check_in(
             "message": f"{emp.name} is already checked in.",
             "employee": {"name": emp.name, "employee_id": emp.employee_id, "department": emp.department},
             "check_in_time": to_iso(existing.check_in),
-            **_checkout_meta(existing.check_in),
+            **_checkout_meta(ensure_utc(existing.check_in)),
         }
 
     now = now_utc()
@@ -164,22 +165,24 @@ async def check_out(
     log = next(lg for lg, em in open_rows if em.id == emp_id)
     emp = next(em for lg, em in open_rows if em.id == emp_id)
 
-    now           = now_utc()
-    lockout_until = checkout_available_at(log.check_in)
+    check_in = ensure_utc(log.check_in)
+    now      = now_utc()
+    lockout_until = checkout_available_at(check_in)
     if now < lockout_until:
         remaining = int((lockout_until - now).total_seconds())
         mins      = remaining // 60
         secs      = remaining % 60
         raise HTTPException(403, f"Too early to check out. Please wait {mins}m {secs}s more.")
 
-    log.check_out = now; db.commit()
-    d = now - log.check_in
-    hours, mins = int(d.total_seconds()//3600), int((d.total_seconds()%3600)//60)
+    log.check_out = now
+    db.commit()
+    worked = now - check_in
+    hours, mins = int(worked.total_seconds() // 3600), int((worked.total_seconds() % 3600) // 60)
     return {
         "status": "checked_out",
         "message": f"Goodbye, {emp.name}! You worked {hours}h {mins}m today.",
         "employee": {"name": emp.name, "employee_id": emp.employee_id, "department": emp.department},
-        "check_in_time": to_iso(log.check_in),
+        "check_in_time": to_iso(check_in),
         "check_out_time": to_iso(now),
         "duration": f"{hours}h {mins}m",
         "confidence": confidence,

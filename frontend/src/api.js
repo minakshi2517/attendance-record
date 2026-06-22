@@ -6,7 +6,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 120000, // face scan on server can take up to 2 min on first run
+  timeout: 180000, // face scan on HF can take up to 3 min
 })
 
 api.interceptors.request.use(config => {

@@ -39,7 +39,13 @@ def to_iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def ensure_utc(dt: datetime) -> datetime:
+    if dt is None:
+        return now_utc()
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def checkout_available_at(check_in: datetime) -> datetime:
-    if check_in.tzinfo is None:
-        check_in = check_in.replace(tzinfo=timezone.utc)
-    return check_in + timedelta(minutes=settings.CHECKOUT_LOCKOUT_MINUTES)
+    return ensure_utc(check_in) + timedelta(minutes=settings.CHECKOUT_LOCKOUT_MINUTES)
