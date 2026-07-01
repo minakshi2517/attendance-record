@@ -4,7 +4,7 @@ import useAuthStore from '../store/authstore'
 import api, { parseApiError } from '../api'
 
 export default function AdminLogin() {
-  const [form, setForm] = useState({ username:'admin', password:'' })
+  const [form, setForm] = useState({ username:'', password:'' })
   const [err,  setErr]  = useState('')
   const [loading, setLoading] = useState(false)
   const { login, logout } = useAuthStore()
@@ -47,9 +47,6 @@ export default function AdminLogin() {
           {loading ? 'Signing in...' : 'Login'}
         </button>
         {err && <div className="alert alert-error" style={{marginTop:12}}>{err}</div>}
-        <p style={{color:'#64748b', fontSize:12, marginTop:12, textAlign:'center'}}>
-          Default: admin / admin123
-        </p>
       </div>
     </div>
   )

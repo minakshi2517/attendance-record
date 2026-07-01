@@ -12,22 +12,51 @@ pinned: false
 
 FastAPI backend for the face-recognition attendance system (DeepFace + TensorFlow).
 
-## Environment variables (set these in the Space "Settings → Variables and secrets")
+## Local setup (secure)
 
-- `SECRET_KEY` — a long random string used to sign login tokens.
-- `DATABASE_URL` — optional. Defaults to local SQLite. Set a PostgreSQL URL
-  (e.g. from Neon/Supabase) if you want data to survive rebuilds.
+```powershell
+cd backend
+python scripts/generate_env.py
+python scripts/reset_admin.py
+python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
 
-## First-time admin setup
+Credentials are written to `ADMIN_CREDENTIALS.local.txt` (gitignored). **Do not commit `.env`.**
 
-After the Space is running, create the first admin account by sending a POST
-request to `/api/auth/setup` with JSON:
+## Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SECRET_KEY` | Yes | Random string (32+ chars) for JWT signing |
+| `SETUP_KEY` | Yes | Secret for one-time `/api/auth/setup` |
+| `DEFAULT_ADMIN_USER` | Yes | Bootstrap admin username (not `admin`) |
+| `DEFAULT_ADMIN_PASSWORD` | Yes | Strong password (12+ chars, mixed case, digit, symbol) |
+| `ALLOWED_ORIGINS` | Yes | Comma-separated frontend URLs for CORS |
+| `DATABASE_URL` | No | Defaults to SQLite |
+
+## First-time admin setup (production)
+
+Option A — use `scripts/generate_env.py` + `scripts/reset_admin.py` (recommended).
+
+Option B — POST `/api/auth/setup` only when **no admin exists**:
 
 ```json
 {
-  "username": "admin",
+  "username": "your_username",
   "email": "admin@example.com",
-  "password": "your-password",
-  "setup_key": "SETUP_ATTENDANCE_2024"
+  "password": "YourStr0ng!Pass",
+  "setup_key": "<SETUP_KEY from .env>"
+}
+```
+
+## Change password after login
+
+POST `/api/auth/change-credentials` with Bearer token:
+
+```json
+{
+  "current_password": "old",
+  "new_password": "NewStr0ng!Pass",
+  "new_username": "optional_new_username"
 }
 ```

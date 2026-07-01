@@ -11,7 +11,7 @@ echo.
 echo ========================================
 echo  Backend:  http://127.0.0.1:8000
 echo  Frontend: http://127.0.0.1:5173
-echo  Admin:    admin / admin123
+echo  Admin login: see backend\ADMIN_CREDENTIALS.local.txt
 echo ========================================
 echo Dono CMD windows minimize hongi — band mat karna!
 pause
