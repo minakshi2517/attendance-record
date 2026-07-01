@@ -24,7 +24,7 @@ if (Test-Path $work) { Remove-Item -Recurse -Force $work }
 git clone "https://huggingface.co/spaces/$User/$Space" $work
 
 Write-Host "==> Copying backend files (excluding venv, db, caches)..." -ForegroundColor Cyan
-$exclude = @("venv", ".venv", "__pycache__", "attendance.db", ".env")
+$exclude = @("venv", ".venv", "__pycache__", "attendance.db", ".env", "ADMIN_CREDENTIALS.local.txt")
 Get-ChildItem -Path $backend -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
     Copy-Item -Path $_.FullName -Destination $work -Recurse -Force
 }
